@@ -69,3 +69,9 @@ test('CSV rejects truncated quoted values', () => {
   expect(() => parseCsv('value\n"truncated')).toThrow('unterminated');
   expect(() => parseCsv('value\n"truncated\n')).toThrow('unterminated');
 });
+
+test('CSV keeps empty parsed records but ignores absent trailing lines', () => {
+  expect(parseCsv('a,b\n,\n1,x\n"",""\n').rows).toEqual([{ a: '', b: '' }, { a: '1', b: 'x' }, { a: '', b: '' }]);
+  expect(parseCsv('a\n""\n').rows).toEqual([{ a: '' }]);
+  expect(parseCsv('a\n\n1\n').rows).toEqual([{ a: '' }, { a: '1' }]);
+});

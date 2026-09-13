@@ -1,8 +1,9 @@
 type Dialect = "sqlite" | "postgres";
 export interface SqlSelection { from: number; to: number }
 
-function structuralWords(sql: string, dialect: Dialect = "sqlite"): string[] {
+function structuralWords(sql: string, dialect: Dialect = "sqlite", keepQuoted = false): string[] {
   const words: string[] = [];
+  let quoteStart = 0;
   let quote: "'" | '"' | "`" | null = null;
   let escapeString = false;
   let lineComment = false;
@@ -22,14 +23,27 @@ function structuralWords(sql: string, dialect: Dialect = "sqlite"): string[] {
     }
     if (quote) {
       if (escapeString && ch === "\\") { i++; continue; }
-      if (ch === quote) { if (sql[i + 1] === quote) i++; else quote = null; }
+      if (ch === quote) {
+        if (sql[i + 1] === quote) i++;
+        else {
+          if (keepQuoted) words.push(sql.slice(quoteStart + 1, i).replaceAll(quote + quote, quote).toUpperCase());
+          quote = null;
+        }
+      }
       continue;
     }
     if (ch === "-" && sql[i + 1] === "-") { lineComment = true; i++; continue; }
     if (ch === "/" && sql[i + 1] === "*") { blockComment = 1; i++; continue; }
     if (ch === "'" || ch === '"' || ch === "`") {
+      quoteStart = i;
       quote = ch;
       escapeString = dialect === "postgres" && ch === "'" && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
+      continue;
+    }
+    if (ch === "[" && dialect === "sqlite") {
+      const end = sql.indexOf("]", i + 1);
+      if (keepQuoted) words.push(sql.slice(i + 1, end < 0 ? sql.length : end).toUpperCase());
+      i = end < 0 ? sql.length : end;
       continue;
     }
     if (ch === "$") {
@@ -83,6 +97,11 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
     if (ch === "'" || ch === '"' || ch === "`") {
       quote = ch;
       escapeString = dialect === "postgres" && ch === "'" && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
+      continue;
+    }
+    if (ch === "[" && dialect === "sqlite") {
+      const end = sql.indexOf("]", i + 1);
+      i = end < 0 ? sql.length : end;
       continue;
     }
     if (ch === "$") {
@@ -168,14 +187,30 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
 export function executionUnits(statements: string[], dialect: Dialect): { statements: string[]; transaction: boolean } {
   let open = false;
   let transaction = false;
+  let explicitBegin = false;
+  const savepoints: string[] = [];
   for (const statement of statements) {
     const words = structuralWords(statement, dialect);
+    const namedWords = structuralWords(statement, dialect, true);
     const verb = words[0];
-    if (verb === 'BEGIN' || verb === 'START') { open = true; transaction = true; }
+    if (verb === 'BEGIN' || verb === 'START') { open = true; explicitBegin = true; transaction = true; }
     if (['COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'].includes(verb)) {
       transaction = true;
+      if (dialect === 'sqlite' && verb === 'SAVEPOINT') { open = true; savepoints.push(namedWords[1]); }
       if (!open) throw new Error('Run the complete transaction together using Run all or a selection.');
-      if (['COMMIT', 'END', 'ABORT'].includes(verb) || (verb === 'ROLLBACK' && !words.includes('TO'))) open = words.includes('CHAIN') && !words.includes('NO');
+      if (dialect === 'sqlite' && (verb === 'RELEASE' || (verb === 'ROLLBACK' && words.includes('TO')))) {
+        const nameIndex = verb === 'RELEASE' ? 1 : words.indexOf('TO') + 1;
+        const name = namedWords[nameIndex + (words[nameIndex] === 'SAVEPOINT' ? 1 : 0)];
+        const index = savepoints.lastIndexOf(name);
+        if (index < 0) throw new Error('Include the matching SAVEPOINT in this transaction.');
+        savepoints.splice(index + (verb === 'ROLLBACK' ? 1 : 0));
+        if (!explicitBegin && !savepoints.length) open = false;
+      }
+      if (['COMMIT', 'END', 'ABORT'].includes(verb) || (verb === 'ROLLBACK' && !words.includes('TO'))) {
+        open = words.includes('CHAIN') && !words.includes('NO');
+        explicitBegin = open;
+        savepoints.length = 0;
+      }
     }
   }
   if (open) throw new Error('Include COMMIT or ROLLBACK and run the complete transaction together.');

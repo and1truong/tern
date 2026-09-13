@@ -347,3 +347,19 @@ test('SQL execution retains transaction rollback when a later statement fails', 
   expect(() => runExec(path, units.statements[0])).toThrow();
   expect(runQuery(path, 'SELECT v FROM t', []).rows).toEqual([{ v: 1 }]);
 });
+
+test('SQLite top-level savepoints execute together and release their transaction', () => {
+  const path = join(dir, 'savepoints.sqlite');
+  seed(path);
+  for (const script of [
+    'SAVEPOINT [a;b]; SELECT 1; RELEASE "a;b";',
+    'SAVEPOINT outer; SAVEPOINT inner; INSERT INTO users(email) VALUES (\'saved\'); RELEASE outer;',
+    'SAVEPOINT "SAVEPOINT"; INSERT INTO users(email) VALUES (\'reverted\'); ROLLBACK TO "SAVEPOINT"; RELEASE "SAVEPOINT";',
+  ]) {
+    const units = executionUnits(splitSqlStatements(script).map(s => s.sql), 'sqlite');
+    expect(units.transaction).toBe(true);
+    runExec(path, units.statements[0]);
+  }
+  expect(runQuery(path, 'SELECT email FROM users WHERE email IN (\'saved\', \'reverted\')', []).rows).toEqual([{ email: 'saved' }]);
+  expect(() => executionUnits(['SAVEPOINT s', 'SAVEPOINT t', 'RELEASE t'], 'sqlite')).toThrow('COMMIT or ROLLBACK');
+});

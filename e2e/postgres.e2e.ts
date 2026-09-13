@@ -120,6 +120,8 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await page.getByRole('tab', { name: 'verify.filter_test', exact: true }).click();
     await expect(page.getByText('(match everything)', { exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'Query 1', exact: true }).click();
+    await run('UPDATE verify.filter_test SET id=id RETURNING id AS returned_id;');
+    await expect(page.getByRole('columnheader', { name: 'Column 1', exact: true })).toBeVisible();
     await run('EXPLAIN ANALYZE UPDATE verify.filter_test SET id=id+10;');
     await expect(page.getByRole('columnheader', { name: 'QUERY PLAN', exact: true })).toBeVisible();
     expect(sql('SELECT sum(id) FROM verify.filter_test')).toBe('23');

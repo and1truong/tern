@@ -301,6 +301,28 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP TABLE public.fk_source, public.fk_target_a, public.fk_target_b'); }
   });
 
+  test("DML RETURNING preserves requested rows", async () => {
+    await runPgExec(url, 'CREATE TABLE public.pgserver_returning_test(id integer)');
+    try {
+      const inserted = await runPgExec(url, 'INSERT INTO public.pgserver_returning_test VALUES(7) RETURNING id');
+      expect(inserted.result?.columns).toEqual(['Column 1']);
+      expect(inserted.result?.rows).toEqual([{ 'Column 1': 7 }]);
+      expect((await runPgExec(url, 'DELETE FROM public.pgserver_returning_test RETURNING id AS x, id+1 AS x')).result?.rows).toEqual([{ 'Column 1': 7, 'Column 2': 8 }]);
+    } finally { await runPgExec(url, 'DROP TABLE public.pgserver_returning_test'); }
+  });
+
+  test("foreign tables appear in the catalog and can be queried", async () => {
+    const location = (await runPgQuery(url, 'SELECT current_database() AS db, current_user AS username, inet_server_port() AS port', [])).rows[0];
+    const literal = (value: unknown) => String(value).replaceAll("'", "''");
+    await runPgExec(url, `CREATE EXTENSION IF NOT EXISTS postgres_fdw; CREATE SERVER pgserver_fdw_test FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host '127.0.0.1', dbname '${literal(location.db)}', port '${literal(location.port)}'); CREATE USER MAPPING FOR CURRENT_USER SERVER pgserver_fdw_test OPTIONS (user '${literal(location.username)}'); CREATE FOREIGN TABLE public.pgserver_foreign_test(relname name) SERVER pgserver_fdw_test OPTIONS (schema_name 'pg_catalog', table_name 'pg_class')`);
+    try {
+      const table = (await readPgSchema(url)).tables.find(t => t.name === 'pgserver_foreign_test');
+      expect(table?.type).toBe('table');
+      expect(table?.columns.map(c => c.name)).toEqual(['relname']);
+      expect((await runPgQuery(url, 'SELECT * FROM public.pgserver_foreign_test', [], 1)).rows).toHaveLength(1);
+    } finally { await runPgExec(url, 'DROP SERVER pgserver_fdw_test CASCADE'); }
+  });
+
   test("query refuses write statements", async () => {
     await expect(runPgQuery(url, `DELETE FROM ${T}`, [], 100)).rejects.toBeInstanceOf(DbError);
   });

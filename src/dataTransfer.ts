@@ -58,8 +58,10 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
   let record: string[] = [];
   let value = "";
   let quoted = false;
+  let recordStarted = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
+    if (ch !== "\n" && ch !== "\r") recordStarted = true;
     if (quoted) {
       if (ch === '"') {
         if (text[i + 1] === '"') { value += '"'; i++; }
@@ -72,15 +74,16 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
     if (ch === "\n" || ch === "\r") {
       if (ch === "\r" && text[i + 1] === "\n") i++;
       record.push(value); value = "";
-      if (record.some((cell) => cell !== "")) records.push(record);
+      records.push(record);
       record = [];
+      recordStarted = false;
       continue;
     }
     value += ch;
   }
   if (quoted) throw new Error("CSV contains an unterminated quoted field");
   record.push(value);
-  if (record.some((cell) => cell !== "")) records.push(record);
+  if (recordStarted) records.push(record);
   const columns = (records.shift() ?? []).map((column) => column.trim());
   if (!columns.length || columns.some((column) => !column)) throw new Error("CSV must have a non-empty header row");
   if (new Set(columns).size !== columns.length) throw new Error("CSV header names must be unique");

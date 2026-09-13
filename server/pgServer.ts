@@ -176,7 +176,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
          JOIN information_schema.tables t
            ON t.table_schema = c.table_schema AND t.table_name = c.table_name
         WHERE c.table_schema NOT IN ('pg_catalog','information_schema')
-          AND t.table_type IN ('BASE TABLE','VIEW')
+          AND t.table_type IN ('BASE TABLE','VIEW','FOREIGN')
         ORDER BY c.table_schema, c.table_name, c.ordinal_position`,
     ) as Record<string, unknown>[];
 
@@ -606,11 +606,12 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
     let rowsAffected = 0;
     let result: QueryResult | undefined;
     try {
-      const rows = await controlledPg(url, connection, connection.unsafe(sql), signal, timeoutMs) as unknown[];
+      const rows = await controlledPg(url, connection, connection.unsafe(sql).values(), signal, timeoutMs) as unknown[][];
       rowsAffected = affectedOf(rows);
-      if (sqlTokens(sql)[0] === "EXPLAIN") {
-        const records = rows as Record<string, unknown>[];
-        result = { columns: Object.keys(records[0] ?? {}), rows: records.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, encodeDbValue(value)]))), ms: 0, hasMore: false, offset: 0 };
+      if (rows.length > 0 || sqlTokens(sql)[0] === "EXPLAIN") {
+        // Bun values() retains duplicate labels' values but exposes no column metadata.
+        const columns = sqlTokens(sql)[0] === "EXPLAIN" ? ["QUERY PLAN"] : (rows[0] ?? []).map((_, index) => `Column ${index + 1}`);
+        result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, hasMore: false, offset: 0 };
       }
     } catch (e) {
       throw new DbError("sql", e instanceof Error ? e.message : String(e));
