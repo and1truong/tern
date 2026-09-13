@@ -10,8 +10,8 @@ export interface SchemaRelation {
 
 export function schemaRelations(schema: DbSchema): SchemaRelation[] {
   const relations: SchemaRelation[] = [];
-  for (const table of schema.tables) for (const column of table.columns) {
-    const match = column.fk?.match(/^(.+)\(([^()]+)\)$/);
+  for (const table of schema.tables) for (const column of table.columns) for (const target of [column.fk ?? []].flat()) {
+    const match = target.match(/^(.+)\(([^()]+)\)$/);
     if (match) relations.push({ fromTable: table, fromColumn: column.name, toTable: match[1], toColumn: match[2] });
   }
   return relations;

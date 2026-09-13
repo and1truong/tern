@@ -116,6 +116,14 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await run('EXPLAIN ANALYZE UPDATE verify.filter_test SET id=id+10;');
     await expect(page.getByRole('columnheader', { name: 'QUERY PLAN', exact: true })).toBeVisible();
     expect(sql('SELECT sum(id) FROM verify.filter_test')).toBe('23');
+    await page.getByRole('tab', { name: 'verify.filter_test', exact: true }).click();
+    await expect(page.getByRole('cell', { name: '11', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '12', exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Query 1', exact: true }).click();
+    await run("ALTER TABLE verify.filter_test ADD COLUMN added text DEFAULT 'refreshed';");
+    await page.getByRole('tab', { name: 'verify.filter_test', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'refreshed', exact: true })).toHaveCount(2);
+    await page.getByRole('tab', { name: 'Query 1', exact: true }).click();
     await editor.press('ControlOrMeta+a');
     await editor.pressSequentially('SELECT count(*) AS verified_users FROM verify.users;');
   });

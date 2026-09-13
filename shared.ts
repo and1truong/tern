@@ -13,7 +13,7 @@ export interface DbColumn {
   type: string;        // declared type, "" if none
   notNull: boolean;
   pk: boolean;
-  fk: string | null;   // "refsTable(refsCol)" or null
+  fk: string | string[] | null;   // One or more "refsTable(refsCol)" targets
   defaultValue?: string | null;
   identity?: boolean;
   generated?: boolean;

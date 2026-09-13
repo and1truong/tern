@@ -40,7 +40,7 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
       if (!abort.signal.aborted) { setResult(r); onLatency(r.ms); }
     }).catch((e) => { if (!abort.signal.aborted) setError(String(e)); });
     return () => abort.abort();
-  }, [query, parameters, size, page, revision]);
+  }, [query, parameters, size, page, revision, table]);
   const changed = useCallback((value: boolean) => { setDirty(value); onDirty(value); }, [onDirty]);
   const exportAll = async () => {
     const rows: Record<string, unknown>[] = [];

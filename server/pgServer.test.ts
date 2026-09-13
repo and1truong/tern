@@ -70,8 +70,8 @@ test("pairs composite foreign-key columns by catalog ordinal", () => {
     { table_schema: "audit", table_name: "events", constraint_name: "events_tenant_actor_fkey", constraint_type: "FOREIGN KEY", column_name: "tenant_id", ref_schema: "core", ref_table: "users", ref_column: "tenant_id" },
     { table_schema: "audit", table_name: "events", constraint_name: "events_tenant_actor_fkey", constraint_type: "FOREIGN KEY", column_name: "actor_id", ref_schema: "core", ref_table: "users", ref_column: "id" },
   ]);
-  expect(metadata.foreign.get("audit\0events\0tenant_id")).toBe("core.users(tenant_id)");
-  expect(metadata.foreign.get("audit\0events\0actor_id")).toBe("core.users(id)");
+  expect(metadata.foreign.get("audit\0events\0tenant_id")).toEqual(["core.users(tenant_id)"]);
+  expect(metadata.foreign.get("audit\0events\0actor_id")).toEqual(["core.users(id)"]);
 });
 
 // Integration tests require a live Postgres. Set TEST_PG_URL to enable, e.g.
@@ -293,6 +293,14 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP TABLE public.pgserver_explain_test'); }
   });
 
+  test("catalog retains multiple foreign keys on the same column", async () => {
+    await runPgExec(url, 'CREATE TABLE public.fk_target_a(id integer PRIMARY KEY); CREATE TABLE public.fk_target_b(id integer PRIMARY KEY); CREATE TABLE public.fk_source(id integer REFERENCES public.fk_target_a(id) REFERENCES public.fk_target_b(id))');
+    try {
+      const schema = await readPgSchema(url);
+      expect(schema.tables.find(t => t.name === 'fk_source')?.columns[0].fk).toEqual(['public.fk_target_a(id)', 'public.fk_target_b(id)']);
+    } finally { await runPgExec(url, 'DROP TABLE public.fk_source, public.fk_target_a, public.fk_target_b'); }
+  });
+
   test("query refuses write statements", async () => {
     await expect(runPgQuery(url, `DELETE FROM ${T}`, [], 100)).rejects.toBeInstanceOf(DbError);
   });
@@ -305,10 +313,10 @@ pgDescribe("pgServer (live)", () => {
 
 test('public foreign-key targets remain schema-qualified', () => {
   const metadata = collectPgKeyMetadata([{ table_schema: 'audit', table_name: 'events', column_name: 'actor_id', constraint_type: 'FOREIGN KEY', ref_schema: 'public', ref_table: 'users', ref_column: 'id' }]);
-  expect(metadata.foreign.get('audit\0events\0actor_id')).toBe('public.users(id)');
+  expect(metadata.foreign.get('audit\0events\0actor_id')).toEqual(['public.users(id)']);
 });
 
 test('dotted foreign-key targets use the same quoted identity as documents', () => {
   const metadata = collectPgKeyMetadata([{ table_schema: 'audit', table_name: 'events', column_name: 'actor_id', constraint_type: 'FOREIGN KEY', ref_schema: 'a.b', ref_table: 'c', ref_column: 'id' }]);
-  expect(metadata.foreign.get('audit\0events\0actor_id')).toBe('"a.b"."c"(id)');
+  expect(metadata.foreign.get('audit\0events\0actor_id')).toEqual(['"a.b"."c"(id)']);
 });

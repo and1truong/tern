@@ -578,7 +578,7 @@ export function StructurePane({ table, schema }: { table: DbTable; schema: DbSch
               <td className="px-2 py-1 border-b border-[var(--border)] mono text-[var(--muted)]">{c.identity ? "IDENTITY" : c.generated ? "GENERATED" : c.defaultValue ?? ""}</td>
               <td className="px-2 py-1 border-b border-[var(--border)] text-[var(--muted)]">
                 {c.pk ? <span className="text-[var(--accent)]">PK</span> : ""}
-                {c.fk ? <span className="ml-1 text-[var(--faint)]">→ {c.fk}</span> : ""}
+                {c.fk ? <span className="ml-1 text-[var(--faint)]">→ {[c.fk].flat().join(", ")}</span> : ""}
               </td>
             </tr>
           ))}

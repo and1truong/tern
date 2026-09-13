@@ -36,3 +36,12 @@ test('quoted dotted foreign-key targets resolve to their actual table', () => {
   ] };
   expect(schemaToMermaid(dotted)).toContain('a_b_c ||--o{ audit_events');
 });
+
+test('renders every foreign-key target sharing a source column', () => {
+  const multiple: DbSchema = { ...schema, tables: [schema.tables[0], { ...schema.tables[0], name: 'admins' },
+    { ...schema.tables[1], columns: [{ ...schema.tables[1].columns[0], fk: ['public.users(id)', 'public.admins(id)'] }] },
+  ] };
+  expect(schemaRelations(multiple)).toHaveLength(2);
+  expect(schemaToMermaid(multiple)).toContain('public_users ||--o{ audit_events');
+  expect(schemaToMermaid(multiple)).toContain('public_admins ||--o{ audit_events');
+});

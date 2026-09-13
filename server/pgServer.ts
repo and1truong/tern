@@ -63,7 +63,7 @@ function affectedOf(rows: unknown[]): number {
 
 export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
   const primary = new Set<string>();
-  const foreign = new Map<string, string>();
+  const foreign = new Map<string, string[]>();
   const uniqueGroups = new Map<string, string[]>();
   for (const row of rows) {
     const schema = String(row.table_schema);
@@ -77,7 +77,7 @@ export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
       const refTable = refSchema.includes('.') || target.includes('.')
         ? [refSchema, target].filter(Boolean).map(part => `"${part.replace(/"/g, '""')}"`).join('.')
         : `${refSchema ? `${refSchema}.` : ""}${target}`;
-      foreign.set(key, `${refTable}(${String(row.ref_column)})`);
+      foreign.set(key, [...(foreign.get(key) ?? []), `${refTable}(${String(row.ref_column)})`]);
     } else if (row.constraint_type === "UNIQUE") {
       const group = `${schema}\0${table}\0${String(row.constraint_name)}`;
       uniqueGroups.set(group, [...(uniqueGroups.get(group) ?? []), column]);
