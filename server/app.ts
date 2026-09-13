@@ -90,7 +90,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
       if (req.method === "GET") {
         if (path === "/databases" && body.connId) return h.databases(url);
         if (path === "/schema") return h.schema(url);
-        if (path === "/insights") return h.insights(url);
+        if (path === "/insights") return h.insights(url, req.signal);
       }
       if (req.method !== "POST") return fail("Not found", 404);
       if ((["/exec", "/rows/apply", "/migration/apply"].includes(path) || (path === "/migration/preview" && body.connId)) && !writable.has(accessKey)) return fail("Connection is read-only", 403);

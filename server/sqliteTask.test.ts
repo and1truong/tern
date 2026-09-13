@@ -18,3 +18,15 @@ test('native SQLite query timeout and cancellation leave the server responsive',
     expect(await sqliteTask({ operation: 'query', args: [path, 'SELECT 42 AS answer', []] })).toMatchObject({ rows: [{ answer: 42 }] });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('SQLite insights use the cancellable subprocess and still return integrity results', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tern-insights-'));
+  const path = join(dir, 'test.sqlite');
+  const db = new Database(path); db.exec('CREATE TABLE t (id INTEGER)'); db.close();
+  try {
+    await expect(sqliteTask({ operation: 'insights', args: [path] }, undefined, 0)).rejects.toMatchObject({ code: 'timeout' });
+    const controller = new AbortController(); controller.abort();
+    await expect(sqliteTask({ operation: 'insights', args: [path] }, controller.signal)).rejects.toMatchObject({ code: 'cancelled' });
+    expect(await sqliteTask({ operation: 'insights', args: [path] })).toMatchObject({ metrics: { integrity: 'ok' } });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

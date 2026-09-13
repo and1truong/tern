@@ -347,6 +347,31 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SERVER pgserver_fdw_test CASCADE'); }
   });
 
+  test("DDL replay retains view security, check options and column collations", async () => {
+    await runPgExec(url, `CREATE SCHEMA tern_ddl_options;
+      CREATE COLLATION tern_ddl_options."Case Collation" FROM "C";
+      CREATE TABLE tern_ddl_options.items (name text COLLATE tern_ddl_options."Case Collation");
+      CREATE VIEW tern_ddl_options.visible WITH (security_invoker=true, security_barrier=true) AS
+        SELECT name FROM tern_ddl_options.items WHERE name <> '' WITH LOCAL CHECK OPTION`);
+    try {
+      const schema = await readPgSchema(url);
+      const table = schema.tables.find(t => t.schema === 'tern_ddl_options' && t.name === 'items')!;
+      const view = schema.tables.find(t => t.schema === 'tern_ddl_options' && t.name === 'visible')!;
+      expect(table.ddl).toContain('COLLATE tern_ddl_options."Case Collation"');
+      await runPgExec(url, 'DROP VIEW tern_ddl_options.visible; DROP TABLE tern_ddl_options.items');
+      await runPgExec(url, table.ddl + view.ddl);
+      const options = await runPgQuery(url, `SELECT option_name, option_value FROM pg_class c,
+        LATERAL pg_options_to_table(c.reloptions) WHERE c.oid = 'tern_ddl_options.visible'::regclass`, []);
+      expect(Object.fromEntries(options.rows.map(r => [r.option_name, r.option_value]))).toEqual({
+        security_invoker: 'true', security_barrier: 'true', check_option: 'local',
+      });
+      const collation = await runPgQuery(url, `SELECT a.attcollation = 'tern_ddl_options."Case Collation"'::regcollation AS retained
+        FROM pg_attribute a WHERE a.attrelid = 'tern_ddl_options.items'::regclass AND a.attname = 'name'`, []);
+      expect(collation.rows[0]?.retained).toBe(true);
+      await expect(runPgExec(url, "INSERT INTO tern_ddl_options.visible VALUES ('')")).rejects.toThrow();
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_ddl_options CASCADE'); }
+  });
+
   test("partition DDL restores bounds and routing", async () => {
     await runPgExec(url, 'CREATE SCHEMA tern_partition_test; CREATE TABLE tern_partition_test.parent(id integer) PARTITION BY RANGE(id); CREATE TABLE tern_partition_test.child PARTITION OF tern_partition_test.parent FOR VALUES FROM(0) TO(10)');
     try {

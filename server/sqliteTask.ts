@@ -1,11 +1,11 @@
 import { DbError } from "../shared.ts";
-import type { QueryResult, ExecResult, MigrationResult, RowMutationResult } from "../shared.ts";
-import { runQuery, explainQuery, runExec, runMigration, runRowChanges } from "./dbServer.ts";
+import type { QueryResult, ExecResult, MigrationResult, RowMutationResult, DatabaseInsights } from "../shared.ts";
+import { runQuery, explainQuery, runExec, runMigration, runRowChanges, readInsights } from "./dbServer.ts";
 
-type Task = { operation: 'query' | 'explain' | 'exec' | 'migration' | 'rows'; args: unknown[] };
+type Task = { operation: 'query' | 'explain' | 'exec' | 'migration' | 'rows' | 'insights'; args: unknown[] };
 // SQLite is synchronous. A short-lived Bun subprocess makes cancellation interrupt
 // native SQL too; the OS closes the connection and rolls back unfinished writes.
-export async function sqliteTask<T extends QueryResult | ExecResult | MigrationResult | RowMutationResult>(task: Task, signal?: AbortSignal, timeoutMs = 30_000): Promise<T> {
+export async function sqliteTask<T extends QueryResult | ExecResult | MigrationResult | RowMutationResult | DatabaseInsights>(task: Task, signal?: AbortSignal, timeoutMs = 30_000): Promise<T> {
   if (signal?.aborted) throw new DbError('cancelled', 'Query cancelled');
   const child = Bun.spawn([process.execPath, import.meta.path, '--execute'], { stdin: 'pipe', stdout: 'pipe', stderr: 'ignore' });
   child.stdin.write(JSON.stringify(task));
@@ -29,7 +29,7 @@ export async function sqliteTask<T extends QueryResult | ExecResult | MigrationR
 if (import.meta.main && process.argv.includes('--execute')) {
   try {
     const task = await Bun.stdin.json() as Task;
-    const runners = { query: runQuery, explain: explainQuery, exec: runExec, migration: runMigration, rows: runRowChanges };
+    const runners = { query: runQuery, explain: explainQuery, exec: runExec, migration: runMigration, rows: runRowChanges, insights: readInsights };
     const result = (runners[task.operation] as (...args: any[]) => unknown)(...task.args);
     console.log(JSON.stringify({ result }));
   } catch (e) { console.log(JSON.stringify({ error: e instanceof Error ? e.message : 'SQLite error', code: e instanceof DbError ? e.code : 'sql' })); }

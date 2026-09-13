@@ -1,6 +1,6 @@
 import { sqliteTask } from "./sqliteTask.ts";
 import { validateConnectionUrl, type Connections } from "./connections.ts";
-import { createDatabase, readInsights, readSchema } from "./dbServer.ts";
+import { createDatabase, readSchema } from "./dbServer.ts";
 import { explainPgQuery, readPgInsights, readPgSchema, runPgMigration, runPgQuery, runPgExec, runPgRowChanges, testPgConnection } from "./pgServer.ts";
 import { compileRowChanges } from "./rowMutations.ts";
 import type { RowChange } from "../shared.ts";
@@ -68,11 +68,11 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       } catch (error) { return dbErrorResponse(error); }
     },
 
-    async insights(url: URL): Promise<Response> {
+    async insights(url: URL, signal?: AbortSignal): Promise<Response> {
       const connId = url.searchParams.get("connId");
       try {
         if (connId) return Response.json(await readPgInsights(await resolvePgUrl(connId, url.searchParams.get("database") ?? undefined)));
-        return Response.json(readInsights(url.searchParams.get("path") ?? ""));
+        return Response.json(await sqliteTask({ operation: "insights", args: [url.searchParams.get("path") ?? ""] }, signal));
       } catch (error) { return dbErrorResponse(error); }
     },
 

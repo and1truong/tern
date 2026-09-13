@@ -166,6 +166,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     const cols = await db.unsafe(
       `SELECT t.table_schema, t.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               c.is_nullable, c.ordinal_position, c.column_default,
+              CASE WHEN a.attcollation <> typ.typcollation THEN format('%I.%I', cn.nspname, coll.collname) END AS collation,
               pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
               t.table_type, pg_get_partkeydef(rel.oid) AS partition_key,
@@ -179,6 +180,9 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
          JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = t.table_name
          LEFT JOIN information_schema.columns c ON c.table_schema = t.table_schema AND c.table_name = t.table_name
          LEFT JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name
+         LEFT JOIN pg_type typ ON typ.oid = a.atttypid
+         LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
+         LEFT JOIN pg_namespace cn ON cn.oid = coll.collnamespace
         WHERE t.table_schema NOT IN ('pg_catalog','information_schema')
           AND t.table_type IN ('BASE TABLE','VIEW','FOREIGN')
         ORDER BY t.table_schema, t.table_name, c.ordinal_position`,
@@ -210,13 +214,17 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       `CREATE MATERIALIZED VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "").trim().replace(/;$/, "")}${row.ispopulated === false ? "\nWITH NO DATA" : ""};`,
     ]));
     const viewDefinitions = await db.unsafe(
-      `SELECT schemaname AS table_schema, viewname AS table_name, definition
-         FROM pg_views
-        WHERE schemaname NOT IN ('pg_catalog','information_schema')`,
+      `SELECT v.schemaname AS table_schema, v.viewname AS table_name, v.definition,
+              (SELECT string_agg(format('%I = %L', option_name, option_value), ', ' ORDER BY option_name)
+                FROM pg_options_to_table(c.reloptions)) AS options
+         FROM pg_views v
+         JOIN pg_namespace n ON n.nspname = v.schemaname
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = v.viewname
+        WHERE v.schemaname NOT IN ('pg_catalog','information_schema')`,
     ) as Record<string, unknown>[];
     const viewDdl = new Map(viewDefinitions.map((row) => [
       `${row.table_schema}\0${row.table_name}`,
-      `CREATE VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "")}`,
+      `CREATE VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}"${row.options ? ` WITH (${row.options})` : ""} AS\n${String(row.definition ?? "")}`,
     ]));
 
     const comparableRows = await db.unsafe(
@@ -449,7 +457,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
           ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment})`
           : c.generated ? ` GENERATED ALWAYS AS (${metadata.generation_expression}) STORED`
           : c.defaultValue != null ? ` DEFAULT ${c.defaultValue}` : '';
-        return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${generation}${c.notNull ? " NOT NULL" : ""}`;
+        return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${metadata.collation ? ` COLLATE ${metadata.collation}` : ""}${generation}${c.notNull ? " NOT NULL" : ""}`;
       });
       for (const constraint of constraints.filter(c => c.schema === t.schema && c.table === t.name)) {
         definitions.push(`  CONSTRAINT "${constraint.name.replace(/"/g, '""')}" ${constraint.definition}`);
