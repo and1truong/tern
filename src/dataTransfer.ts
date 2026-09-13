@@ -34,7 +34,7 @@ export function serializeRows(format: ExportFormat, columns: string[], rows: Rec
   ));
   if (format === "json") return JSON.stringify(displayRows, null, 2) + "\n";
   if (format === "markdown") {
-    const cell = (value: unknown) => String(value ?? "NULL").replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+    const cell = (value: unknown) => (value != null && typeof value === "object" ? JSON.stringify(value) : String(value ?? "NULL")).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
     return `| ${columns.map(cell).join(" | ")} |\n| ${columns.map(() => "---").join(" | ")} |\n`
       + displayRows.map((row) => `| ${columns.map((column) => cell(row[column])).join(" | ")} |`).join("\n") + "\n";
   }

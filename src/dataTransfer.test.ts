@@ -82,3 +82,8 @@ test("CSV rejects text after closing quotes", () => {
   }
   expect(parseCsv('a,b\r\n"ok",""\r\n"x","y"').rows).toEqual([{ a: "ok", b: "" }, { a: "x", b: "y" }]);
 });
+
+test("Markdown preserves structured JSON and arrays before escaping", () => {
+  expect(serializeRows("markdown", ["json", "array"], [{ json: { message: "a|b" }, array: [1, { ok: true }] }]))
+    .toContain('| {"message":"a\\|b"} | [1,{"ok":true}] |');
+});
