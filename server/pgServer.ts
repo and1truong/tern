@@ -169,7 +169,9 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
               CASE WHEN a.attcollation <> typ.typcollation THEN format('%I.%I', cn.nspname, coll.collname) END AS collation,
               pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
-              t.table_type, rel.relpersistence, pg_get_partkeydef(rel.oid) AS partition_key,
+              t.table_type, rel.relpersistence, rel.relrowsecurity, rel.relforcerowsecurity,
+              EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = rel.oid) AS has_policies,
+              seq.seqmin, seq.seqmax, seq.seqcache, seq.seqcycle, pg_get_partkeydef(rel.oid) AS partition_key,
               CASE WHEN rel.relispartition THEN pg_get_expr(rel.relpartbound, rel.oid) END AS partition_bound,
               (SELECT string_agg(format('%I.%I', pn.nspname, parent.relname), ', ' ORDER BY inh.inhseqno) FROM pg_inherits inh
                 JOIN pg_class parent ON parent.oid = inh.inhparent
@@ -180,6 +182,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
          JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = t.table_name
          LEFT JOIN information_schema.columns c ON c.table_schema = t.table_schema AND c.table_name = t.table_name
          LEFT JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name
+         LEFT JOIN pg_sequence seq ON seq.seqrelid = pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name)::regclass
          LEFT JOIN pg_type typ ON typ.oid = a.atttypid
          LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
          LEFT JOIN pg_namespace cn ON cn.oid = coll.collnamespace
@@ -452,6 +455,8 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       // Foreign tables need FDW server/options; local CREATE TABLE would misrepresent them.
       if (cols.some(row => row.table_schema === t.schema && row.table_name === t.name && row.table_type === "FOREIGN")) continue;
       const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name)!;
+      // RLS policies are not synthesized; do not offer DDL that drops their protection.
+      if (metadata.relrowsecurity || metadata.relforcerowsecurity || metadata.has_policies) continue;
       const inherits = metadata.parent_relation && !metadata.partition_bound ? ` INHERITS (${metadata.parent_relation})` : "";
       const definitions = t.columns.flatMap(c => {
         const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
@@ -459,7 +464,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')
           ? ({ smallint: 'smallserial', integer: 'serial', bigint: 'bigserial' } as Record<string, string>)[c.type] : undefined;
         const generation = serialType ? '' : c.identity
-          ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment})`
+          ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment} MINVALUE ${metadata.seqmin} MAXVALUE ${metadata.seqmax} CACHE ${metadata.seqcache} ${metadata.seqcycle ? "CYCLE" : "NO CYCLE"})`
           : c.generated ? ` GENERATED ALWAYS AS (${metadata.generation_expression}) STORED`
           : c.defaultValue != null ? ` DEFAULT ${c.defaultValue}` : '';
         return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${metadata.collation ? ` COLLATE ${metadata.collation}` : ""}${generation}${c.notNull ? " NOT NULL" : ""}`;

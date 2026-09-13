@@ -441,6 +441,26 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SEQUENCE public.tern_route_sequence'); }
   });
 
+  test("DDL withholds RLS tables and preserves complete identity options", async () => {
+    await runPgExec(url, `CREATE SCHEMA tern_security_ddl;
+      CREATE TABLE tern_security_ddl.protected(id integer);
+      ALTER TABLE tern_security_ddl.protected ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE tern_security_ddl.protected FORCE ROW LEVEL SECURITY;
+      CREATE POLICY visible ON tern_security_ddl.protected USING (id > 0);
+      CREATE TABLE tern_security_ddl.ids(id bigint GENERATED ALWAYS AS IDENTITY (START WITH 7 INCREMENT BY 2 MINVALUE 3 MAXVALUE 99 CACHE 5 CYCLE))`);
+    try {
+      const schema = await readPgSchema(url);
+      expect(schema.tables.find(t => t.schema === 'tern_security_ddl' && t.name === 'protected')?.ddl).toBe('');
+      await runPgExec(url, 'ALTER TABLE tern_security_ddl.protected DISABLE ROW LEVEL SECURITY; ALTER TABLE tern_security_ddl.protected NO FORCE ROW LEVEL SECURITY');
+      expect((await readPgSchema(url)).tables.find(t => t.schema === 'tern_security_ddl' && t.name === 'protected')?.ddl).toBe('');
+      const ddl = schema.tables.find(t => t.schema === 'tern_security_ddl' && t.name === 'ids')!.ddl;
+      await runPgExec(url, 'DROP TABLE tern_security_ddl.ids');
+      await runPgExec(url, ddl);
+      const result = await runPgQuery(url, `SELECT seqstart::text, seqincrement::text, seqmin::text, seqmax::text, seqcache::text, seqcycle FROM pg_sequence WHERE seqrelid = pg_get_serial_sequence('tern_security_ddl.ids','id')::regclass`, []);
+      expect(result.rows).toEqual([{ seqstart: '7', seqincrement: '2', seqmin: '3', seqmax: '99', seqcache: '5', seqcycle: true }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_security_ddl CASCADE'); }
+  });
+
   test("partition DDL restores bounds and routing", async () => {
     await runPgExec(url, 'CREATE SCHEMA tern_partition_test; CREATE TABLE tern_partition_test.parent(id integer) PARTITION BY RANGE(id); CREATE TABLE tern_partition_test.child PARTITION OF tern_partition_test.parent FOR VALUES FROM(0) TO(10)');
     try {
