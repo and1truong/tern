@@ -5,7 +5,7 @@ import { dbApi } from "./dbApi.ts";
 import type { DbSource } from "./dbApi.ts";
 import type { DatabaseInsights, DbSchema, DbTable, DbColumn, QueryResult, RowChangeStatement } from "../shared.ts";
 import { tableKey, tableLabel } from "./sqlIdentifiers.ts";
-import { buildRowChanges, coerceCellValue, editKey, rowsToCsv } from "./dataGrid.ts";
+import { buildRowChanges, coerceCellValue, editKey, rowIdentity, rowsToCsv } from "./dataGrid.ts";
 import type { SortSpec } from "./dataGrid.ts";
 import { parseCsv, serializeRows } from "./dataTransfer.ts";
 import type { ExportFormat } from "./dataTransfer.ts";
@@ -172,10 +172,8 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
   const first = result && rows.length ? result.offset + 1 : 0;
   const last = result ? result.offset + rows.length : 0;
   const primaryColumns = table.columns.filter((column) => column.pk);
-  const fallbackKey = table.uniqueKeys?.find((key) => key.length && key.every((name) => table.columns.some((column) => column.name === name && column.notNull))) ?? [];
-  const identityColumns = primaryColumns.length ? primaryColumns : fallbackKey.map((name) => table.columns.find((column) => column.name === name)!);
   const canInsert = writable && table.type === "table";
-  const canEditRows = canInsert && identityColumns.length > 0;
+  const canEditRows = canInsert && rows.some(row => rowIdentity(table, row).length > 0);
   const nonComparableColumns = source.kind === "postgres"
     ? new Set(table.columns.filter((column) => column.comparable === false).map((column) => column.name))
     : undefined;
@@ -249,7 +247,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
           Import CSV
         </button>
         <button onClick={() => { setDeleted(new Set([...deleted, ...selected])); setSelected(new Set()); }}
-          disabled={!canEditRows || selected.size === 0}
+          disabled={!canEditRows || selected.size === 0 || [...selected].some(index => !rowIdentity(table, rows[index]).length)}
           className="px-2 py-1 rounded text-[11px] font-semibold text-[var(--red)] hover:bg-[var(--hover)] disabled:opacity-40">
           Delete selected
         </button>
@@ -280,7 +278,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
               </th>
               {visibleCols.map((c) => (
                 <th key={c} className="text-left font-semibold text-[var(--text)] border-b border-[var(--border)] whitespace-nowrap">
-                  <button aria-label={`Sort by ${c}`} disabled={dirty} onClick={(event) => onSort(c, event.shiftKey)}
+                  <button aria-label={`Sort by ${c}`} disabled={dirty || table.columns.find(column => column.name === c)?.orderable === false} onClick={(event) => onSort(c, event.shiftKey)}
                     className="w-full flex items-center gap-1 px-2 py-1.5 text-left hover:bg-[var(--hover)]">
                     {c}
                     {sorts.find((sort) => sort.column === c) && (
@@ -312,7 +310,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
                   const isNull = value === null || value === undefined;
                   const isNum = typeof value === "number";
                   const column = table.columns.find((candidate) => candidate.name === c);
-                  const canEditCell = canEditRows && !column?.generated && !nonComparableColumns?.has(c) && (v == null || typeof v !== "object");
+                  const canEditCell = canEditRows && rowIdentity(table, row).length > 0 && !column?.generated && !nonComparableColumns?.has(c) && (v == null || typeof v !== "object");
                   return (
                     <td key={c} title={nonComparableColumns?.has(c) ? "Editing unavailable: this type cannot be checked for concurrent changes." : undefined} onDoubleClick={() => { if (canEditCell && !deleted.has(i)) { cancelEdit.current = false; setEditing(stagedKey); } }}
                       className={"px-2 py-1 border-b border-[var(--border)] mono text-[var(--text)] align-top " + (isNum ? "text-right " : "") + (stagedKey in edits ? "bg-[var(--accent)]/10 " : "") + (canEditCell ? "cursor-text" : "")}>

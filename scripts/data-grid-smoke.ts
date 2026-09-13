@@ -55,7 +55,7 @@ async function exercise(width: number) {
         { name: "id", type: "integer", notNull: true, pk: true, fk: null, identity: true, identityGeneration: "BY DEFAULT" },
         { name: "always_id", type: "integer", notNull: true, pk: false, fk: null, identity: true, identityGeneration: "ALWAYS" },
         { name: "name", type: "text", notNull: true, pk: false, fk: null },
-        { name: "computed", type: "integer", notNull: true, pk: false, fk: null, generated: true },
+        { name: "computed", type: "integer", notNull: true, pk: false, fk: null, generated: true, orderable: false },
       ],
     },
     source: { kind: "sqlite", path: "/tmp/smoke.sqlite" },
@@ -85,6 +85,7 @@ async function exercise(width: number) {
   })));
 
   const byLabel = (label: string) => container.querySelector(`[aria-label="${label}"]`) as HTMLElement | null;
+  if (!byLabel("Sort by computed")?.hasAttribute("disabled")) fail(`${width}px: unsupported column sort must be disabled`);
   const sort = byLabel("Sort by name");
   if (!sort) fail(`${width}px: sort control is not visible`);
   sort.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildRowChanges, coerceCellValue, editKey, orderBySql, rowsToCsv, toggleSort } from "./dataGrid.ts";
+import { buildRowChanges, coerceCellValue, editKey, orderBySql, paginationSorts, rowIdentity, rowsToCsv, toggleSort } from "./dataGrid.ts";
 import type { DbTable } from "../shared.ts";
 import { encodeDbValue } from "../binaryValues.ts";
 
@@ -109,4 +109,31 @@ test('noncomparable columns cannot become unguarded updates', () => {
     { name: 'document', type: 'xml', pk: false, notNull: false, fk: null, comparable: false },
   ] };
   expect(buildRowChanges(table, [{ id: 1, document: '<old/>' }], { [editKey(0, 'document')]: '<new/>' }, new Set(), [], new Set(['document']))).toEqual([]);
+});
+
+
+test("nullable primary keys identify only non-null rows", () => {
+  const table: DbTable = { name: "nullable", type: "table", rowCount: -1, ddl: "", columns: [
+    { name: "id", type: "text", pk: true, notNull: false, fk: null },
+    { name: "value", type: "text", pk: false, notNull: false, fk: null },
+  ] };
+  const row = { id: null, value: "duplicate" };
+  expect(rowIdentity(table, row)).toEqual([]);
+  expect(buildRowChanges(table, [row, row], { [editKey(0, "value")]: "changed" }, new Set([1]), [])).toEqual([]);
+  expect(rowIdentity(table, { id: 1, value: "integer key" })).toEqual(["id"]);
+  table.uniqueKeys = [["value"]];
+  expect(rowIdentity(table, row)).toEqual(["value"]);
+});
+
+test("pagination defaults to a unique order and appends tie breakers", () => {
+  const table: DbTable = { name: "ordered", type: "table", rowCount: -1, ddl: "", columns: [
+    { name: "id", type: "integer", pk: true, notNull: true, fk: null },
+    { name: "group", type: "text", pk: false, notNull: false, fk: null },
+    { name: "payload", type: "json", pk: false, notNull: false, fk: null, orderable: false },
+  ] };
+  expect(orderBySql(paginationSorts(table, []))).toBe(' ORDER BY "id" ASC');
+  expect(orderBySql(paginationSorts(table, [{ column: "group", direction: "desc" }]))).toBe(' ORDER BY "group" DESC, "id" ASC');
+  expect(orderBySql(paginationSorts(table, [{ column: "payload", direction: "asc" }]))).toBe(' ORDER BY "id" ASC');
+  table.columns[0].notNull = false;
+  expect(orderBySql(paginationSorts(table, []))).toBe(' ORDER BY "id" ASC, "group" ASC, CAST("payload" AS TEXT) ASC');
 });

@@ -4,7 +4,7 @@ import { dbApi, type DbSource } from "./dbApi.ts";
 import { DataGrid, StructurePane } from "./DatabaseViews.tsx";
 import { DatabaseFilterBuilder } from "./DatabaseFilterBuilder.tsx";
 import { compileGroup, newGroup, type FilterModel } from "./dbFilter.ts";
-import { orderBySql, toggleSort, type SortSpec } from "./dataGrid.ts";
+import { orderBySql, paginationSorts, toggleSort, type SortSpec } from "./dataGrid.ts";
 import { tableSql } from "./sqlIdentifiers.ts";
 
 export function TableDocument({ table, schema, source, writable, onDirty, onLatency }: {
@@ -33,7 +33,7 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
     setPage(0);
   }
   const { where, params } = compileGroup(filter, table.columns, source.kind);
-  const query = `SELECT * FROM ${tableSql(table)}` + (where ? ` WHERE ${where}` : "") + orderBySql(sorts);
+  const query = `SELECT * FROM ${tableSql(table)}` + (where ? ` WHERE ${where}` : "") + orderBySql(paginationSorts(table, sorts));
   const parameters = JSON.stringify(params);
   useEffect(() => {
     if (dirty) return;

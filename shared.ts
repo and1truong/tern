@@ -20,6 +20,7 @@ export interface DbColumn {
   ownedSequence?: boolean;
   generated?: boolean;
   comparable?: boolean;
+  orderable?: boolean;
 }
 
 export interface DbTable {

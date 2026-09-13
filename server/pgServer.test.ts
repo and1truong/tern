@@ -84,6 +84,24 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("table DDL retains standalone indexes and reports unsupported ordering", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_indexes_test');
+    try {
+      await runPgExec(url, `CREATE TABLE pgserver_indexes_test.t(id integer PRIMARY KEY, name text, doc json, location point);
+        CREATE UNIQUE INDEX names_lower ON pgserver_indexes_test.t(lower(name)) WHERE name IS NOT NULL;
+        CREATE INDEX names_plain ON pgserver_indexes_test.t(name);`);
+      const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_indexes_test' && t.name === 't')!;
+      expect(table.columns.map(c => [c.name, c.orderable])).toEqual([['id', true], ['name', true], ['doc', false], ['location', false]]);
+      await runPgExec(url, 'DROP TABLE pgserver_indexes_test.t');
+      await runPgExec(url, table.ddl!);
+      await runPgExec(url, "INSERT INTO pgserver_indexes_test.t(id,name) VALUES(1,'Name')");
+      await expect(runPgExec(url, "INSERT INTO pgserver_indexes_test.t(id,name) VALUES(2,'NAME')")).rejects.toThrow();
+      const replay = await readPgSchema(url);
+      expect(replay.indexes.filter(i => i.schema === 'pgserver_indexes_test')).toHaveLength(3);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_indexes_test CASCADE'); }
+  });
+
+
   test("stored functions can write through explicit writable execution", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_function_test');
     try {

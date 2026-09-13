@@ -1,3 +1,4 @@
+import { buildRowChanges, editKey } from "../src/dataGrid.ts";
 import { splitSqlStatements, executionUnits } from "../src/sqlConsole.ts";
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -485,4 +486,22 @@ test('SQLite transaction batches retain their last row-producing result', () => 
   expect(runExec(path, 'BEGIN; SELECT 1 AS first; SELECT 2 AS last; COMMIT;').result?.rows).toEqual([{ last: 2 }]);
   expect(runExec(path, 'BEGIN; SELECT id FROM users WHERE 0; COMMIT;').result).toMatchObject({ columns: ['id'], rows: [] });
   expect(runQuery(path, "SELECT count(*) AS n FROM users WHERE email='batch-returned'", []).rows).toEqual([{ n: 1 }]);
+});
+
+
+test('SQLite nullable primary key duplicates cannot produce staged mutations', () => {
+  const path = join(dir, 'nullable-primary.sqlite');
+  const db = new Database(path);
+  db.exec("CREATE TABLE nullable_keys(id TEXT PRIMARY KEY, value TEXT); INSERT INTO nullable_keys VALUES(NULL, 'same'), (NULL, 'same'); CREATE TABLE integer_keys(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO integer_keys(value) VALUES('safe');");
+  db.close();
+  const schema = readSchema(path);
+  const table = schema.tables.find(table => table.name === 'nullable_keys')!;
+  const rows = runQuery(path, 'SELECT * FROM nullable_keys', []).rows;
+  expect(rows).toHaveLength(2);
+  expect(buildRowChanges(table, rows, { [editKey(0, 'value')]: 'changed' }, new Set([1]), [])).toEqual([]);
+  const integerTable = schema.tables.find(table => table.name === 'integer_keys')!;
+  const integerRows = runQuery(path, 'SELECT * FROM integer_keys', []).rows;
+  const changes = buildRowChanges(integerTable, integerRows, { [editKey(0, 'value')]: 'updated' }, new Set(), []);
+  expect(changes).toHaveLength(1);
+  expect(runRowChanges(path, changes).rowsAffected).toBe(1);
 });

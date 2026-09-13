@@ -291,7 +291,19 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
                      AND l.typname IN ('anyarray','anycompatiblearray')
                      AND r.typname IN ('anyarray','anycompatiblearray')
                 )
-              ) AS is_comparable
+              ) AS is_comparable,
+              EXISTS (
+                SELECT 1 FROM pg_opclass opc
+                  JOIN pg_am am ON am.oid = opc.opcmethod
+                  JOIN pg_type input_type ON input_type.oid = opc.opcintype
+                WHERE opc.opcdefault AND am.amname = 'btree' AND (
+                  opc.opcintype = effective.oid
+                  OR EXISTS (SELECT 1 FROM pg_cast c WHERE c.castsource = effective.oid AND c.casttarget = opc.opcintype AND c.castcontext = 'i' AND c.castmethod = 'b')
+                  OR (effective.typtype = 'e' AND input_type.typname = 'anyenum')
+                  OR (effective.typtype = 'r' AND input_type.typname = 'anyrange')
+                  OR (effective.typtype = 'm' AND input_type.typname = 'anymultirange')
+                )
+              ) AS is_orderable
          FROM pg_class rel
          JOIN pg_namespace n ON n.oid = rel.relnamespace
          JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -304,6 +316,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         WHERE rel.relkind IN ('r','p','v','m','f')
           AND n.nspname NOT IN ('pg_catalog','information_schema')`,
     ) as Record<string, unknown>[];
+    const orderable = new Map(comparableRows.map(row => [`${row.table_schema}\0${row.table_name}\0${row.column_name}`, row.is_orderable === true]));
     const comparable = new Map(comparableRows.map((row) => [
       `${row.table_schema}\0${row.table_name}\0${row.column_name}`,
       row.is_comparable === true,
@@ -380,6 +393,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         ownedSequence: c.owned_sequence != null,
         generated: c.is_generated != null && c.is_generated !== "NEVER",
         comparable: comparable.get(keyId) ?? false,
+        orderable: orderable.get(keyId) ?? false,
       };
       tbl.columns.push(col);
     }
@@ -391,6 +405,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     // Synthesize a minimal CREATE statement per table for the Structure pane's
     const idx = await db.unsafe(
       `SELECT p.schemaname AS schema, p.tablename AS table_name, p.indexname AS name, p.indexdef AS sql,
+              EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid AND con.contype IN ('p','u','x')) AS constraint_backed,
               CASE WHEN i.indisunique AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
                 THEN ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
                   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
@@ -483,6 +498,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       t.ddl = `CREATE ${metadata.relpersistence === "u" ? "UNLOGGED " : ""}TABLE ${relation} (\n${body}\n)${inherits}${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
       t.ddl = [...sequenceDdl, t.ddl, ...ownershipDdl].join("\n");
       if (metadata.partition_bound) t.ddl += `\nALTER TABLE ${metadata.parent_relation} ATTACH PARTITION ${relation} ${metadata.partition_bound};`;
+      for (const index of idx.filter(index => index.schema === t.schema && index.table_name === t.name && !index.constraint_backed)) t.ddl += `\n${index.sql};`;
     }
 
     const sequenceRows = await db.unsafe(
