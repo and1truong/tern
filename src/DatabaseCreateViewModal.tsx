@@ -5,6 +5,15 @@ import { dbApi } from "./dbApi.ts";
 import type { DbSource } from "./dbApi.ts";
 import type { QueryResult } from "../shared.ts";
 import { unwrapDbValueForDisplay } from "../binaryValues.ts";
+import { firstSqlVerb, isWriteSql, splitSqlStatements } from "./sqlConsole.ts";
+
+export function validateViewQuery(body: string, dialect: DbSource["kind"]): string {
+  const statements = splitSqlStatements(body, dialect);
+  if (statements.length !== 1 || !["SELECT", "WITH", "VALUES"].includes(firstSqlVerb(statements[0].sql, dialect)) || isWriteSql(statements[0].sql, dialect)) {
+    throw new Error("View body must contain exactly one read-only SELECT, WITH, or VALUES query.");
+  }
+  return statements[0].sql;
+}
 
 export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   source: DbSource; onClose: () => void; onCreated: () => void;
@@ -16,13 +25,17 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const ddl = `CREATE VIEW${ifne ? " IF NOT EXISTS" : ""} "${name.replace(/"/g, '""')}" AS ${body.trim()}`;
+  const createDdl = (query: string) => `CREATE VIEW${ifne && source.kind === "sqlite" ? " IF NOT EXISTS" : ""} "${name.replace(/"/g, '""')}" AS ${query}`;
+  let ddl = "";
+  let validationError = "";
+  try { ddl = createDdl(validateViewQuery(body, source.kind)); }
+  catch (error) { if (body.trim()) validationError = String(error); }
   const canCreate = name.trim() && body.trim();
 
   const runPreview = async () => {
     setBusy(true); setErr(null);
     try {
-      setPreview(await dbApi.query(source, body.trim(), [], 100));
+      setPreview(await dbApi.query(source, validateViewQuery(body, source.kind), [], 100));
     } catch (e) { setPreview(null); setErr(String(e)); }
     finally { setBusy(false); }
   };
@@ -30,7 +43,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const create = async () => {
     setBusy(true); setErr(null);
     try {
-      await dbApi.exec(source, ddl, true);
+      await dbApi.exec(source, createDdl(validateViewQuery(body, source.kind)), true);
       onCreated();
       onClose();
     } catch (e) { setErr(String(e)); }
@@ -67,7 +80,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
 
           <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
             <div className="text-[10px] font-bold uppercase tracking-wide text-[var(--faint)] mb-1">DDL</div>
-            <pre className="mono text-[11px] text-[var(--text)] whitespace-pre-wrap break-all">{ddl}</pre>
+            <pre className="mono text-[11px] text-[var(--text)] whitespace-pre-wrap break-all">{validationError || ddl}</pre>
           </div>
 
           {preview && (

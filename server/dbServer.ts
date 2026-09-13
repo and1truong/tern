@@ -232,8 +232,9 @@ export function runExec(pathRaw: string, sql: string): ExecResult {
       if (returning) {
         const statement = db.prepare(sql);
         const labels = statement.columnNames;
-        const columns = new Set(labels).size === labels.length ? labels : labels.map((_, index) => `Column ${index + 1}`);
         const rows = statement.values() as unknown[][];
+        const width = rows[0]?.length ?? labels.length;
+        const columns = width === labels.length && new Set(labels).size === labels.length ? labels : Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
         result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
       } else db.exec(sql);
       rowsAffected = Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);

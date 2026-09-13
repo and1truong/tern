@@ -17,6 +17,11 @@ export function schemaRelations(schema: DbSchema): SchemaRelation[] {
   return relations;
 }
 
+export function relationTarget(tables: DbTable[], target: string): DbTable | undefined {
+  return tables.find(table => tableKey(table) === target)
+    ?? (!target.includes(".") ? tables.find(table => table.name === target) : undefined);
+}
+
 function entityName(table: Pick<DbTable, "schema" | "name">): string {
   const label = `${table.schema ? `${table.schema}_` : ""}${table.name}`.replace(/[^A-Za-z0-9_]/g, "_");
   const identity = JSON.stringify([table.schema ?? null, table.name]);
@@ -38,7 +43,7 @@ export function schemaToMermaid(schema: DbSchema): string {
     lines.push("  }");
   }
   for (const relation of schemaRelations(schema)) {
-    const target = schema.tables.find((table) => table.name === relation.toTable || tableKey(table) === relation.toTable);
+    const target = relationTarget(schema.tables, relation.toTable);
     lines.push(`  ${entityName(target ?? { name: relation.toTable })} ||--o{ ${entityName(relation.fromTable)} : "${relation.fromColumn}"`);
   }
   return lines.join("\n") + "\n";

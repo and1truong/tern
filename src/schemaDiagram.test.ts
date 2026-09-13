@@ -61,3 +61,10 @@ test('entity IDs distinguish colliding schema and table names', () => {
   expect(new Set(targets).size).toBe(4);
   expect(targets.every(target => declarations.includes(target))).toBe(true);
 });
+
+test('qualified targets take precedence over literal dotted bare names', () => {
+  const misleading = { ...schema.tables[0], schema: 'aaa', name: 'public.users' };
+  const source = { ...schema.tables[1], columns: [{ ...schema.tables[1].columns[0], fk: 'public.users(id)' }] };
+  expect(schemaToMermaid({ ...schema, tables: [misleading, schema.tables[0], source] }))
+    .toMatch(/\n  public_users_[a-f0-9_]+ \|\|--o\{ audit_events_/);
+});

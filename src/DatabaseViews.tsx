@@ -9,7 +9,7 @@ import { buildRowChanges, coerceCellValue, editKey, rowsToCsv } from "./dataGrid
 import type { SortSpec } from "./dataGrid.ts";
 import { parseCsv, serializeRows } from "./dataTransfer.ts";
 import type { ExportFormat } from "./dataTransfer.ts";
-import { schemaRelations, schemaToMermaid } from "./schemaDiagram.ts";
+import { relationTarget, schemaRelations, schemaToMermaid } from "./schemaDiagram.ts";
 import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../binaryValues.ts";
 function displayDbValue(value: unknown): string {
   if (isDbBinaryValue(value)) return `<binary ${binaryByteLength(value).toLocaleString()} bytes>`;
@@ -652,7 +652,7 @@ export function SchemaDiagramPane({ schema }: { schema: DbSchema }) {
       <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/></marker></defs>
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
         {schemaRelations(schema).map((r, i) => {
-          const target = tables.find(t => tableKey(t) === r.toTable || tableLabel(t) === r.toTable || t.name === r.toTable);
+          const target = relationTarget(tables, r.toTable);
           const from = positions.get(tableKey(r.fromTable)); const to = target && positions.get(tableKey(target));
           if (!from || !to) return null;
           const fy = from.y + 42 + Math.max(0, r.fromTable.columns.findIndex(c => c.name === r.fromColumn)) * 20;

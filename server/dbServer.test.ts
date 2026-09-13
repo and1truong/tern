@@ -390,6 +390,9 @@ test('SQLite DML RETURNING executes once and preserves requested values', () => 
   const inserted = runExec(path, "INSERT INTO users(email) VALUES('returned') RETURNING id, email");
   expect(inserted.result?.rows).toEqual([{ id: 3, email: 'returned' }]);
   expect(inserted.rowsAffected).toBe(1);
+  const duplicate = runExec(path, 'UPDATE users SET age=age WHERE id=3 RETURNING id AS x, id+1 AS x, email');
+  expect(duplicate.result?.columns).toEqual(['Column 1', 'Column 2', 'Column 3']);
+  expect(duplicate.result?.rows).toEqual([{ 'Column 1': 3, 'Column 2': 4, 'Column 3': 'returned' }]);
   expect(runExec(path, "UPDATE users SET age=age WHERE id=3 RETURNING 9007199254740993 AS exact").result?.rows).toEqual([{ exact: '9007199254740993' }]);
   expect(runExec(path, 'DELETE FROM users WHERE id=3 RETURNING id AS x, id+1 AS x').result?.rows).toEqual([{ 'Column 1': 3, 'Column 2': 4 }]);
   expect(runQuery(path, 'SELECT count(*) AS n FROM users', []).rows).toEqual([{ n: 2 }]);
