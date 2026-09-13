@@ -56,10 +56,17 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await page.getByLabel('Edit row 1 name', { exact: true }).fill('Edited by Playwright');
     await page.getByLabel('Edit row 1 name', { exact: true }).press('Enter');
     expect(sql('SELECT name FROM verify.users WHERE id=1')).toBe('User 001');
+    sql("INSERT INTO verify.users VALUES (0, 'AAA inserted concurrently', 'concurrent@example.test')");
+    await page.getByRole('button', { name: 'Refresh catalog', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Review 1 change', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'AAA inserted concurrently', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Review 1 change', exact: true }).click();
     await page.getByRole('button', { name: 'Apply transaction', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Review row changes' })).toBeHidden();
     expect(sql('SELECT name FROM verify.users WHERE id=1')).toBe('Edited by Playwright');
+    expect(sql('SELECT name FROM verify.users WHERE id=0')).toBe('AAA inserted concurrently');
+    sql('DELETE FROM verify.users WHERE id=0');
+    await page.getByRole('button', { name: 'Refresh catalog', exact: true }).click();
   });
   await test.step('Insert distinguishes explicit empty text from database default', async () => {
     for (const id of [126, 127]) {

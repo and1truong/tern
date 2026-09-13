@@ -180,7 +180,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
     ? new Set(table.columns.filter((column) => column.comparable === false).map((column) => column.name))
     : undefined;
   const changes = buildRowChanges(table, rows, edits, deleted, inserts, nonComparableColumns);
-  const dirty = changes.length > 0;
+  const dirty = editing !== null || Object.keys(edits).length > 0 || deleted.size > 0 || inserts.length > 0;
   useEffect(() => {
     onDirtyChange(dirty);
     return () => onDirtyChange(false);
@@ -254,7 +254,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
           Delete selected
         </button>
         {dirty && <span className="text-[var(--warning)] text-[11px]">{changes.length} pending changes</span>}
-        <button onClick={() => void review()} disabled={!dirty}
+        <button onClick={() => void review()} disabled={!changes.length}
           className="px-2 py-1 rounded text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--hover)] disabled:opacity-40">
           Review {changes.length || ""} change{changes.length === 1 ? "" : "s"}
         </button>
@@ -262,7 +262,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
           className="px-2 py-1 rounded text-[11px] font-semibold text-[var(--muted)] hover:bg-[var(--hover)] disabled:opacity-40">
           Revert
         </button>
-        <button onClick={() => void review()} disabled={!dirty || !writable} className="px-2 py-1 text-[11px] text-[var(--accent)] disabled:opacity-40">Apply…</button>
+        <button onClick={() => void review()} disabled={!changes.length || !writable} className="px-2 py-1 text-[11px] text-[var(--accent)] disabled:opacity-40">Apply…</button>
         {selected.size > 0 && <span className="text-[11px] text-[var(--accent)]">{selected.size} selected</span>}
         {copyState === "copied" && <span className="text-[11px] text-[var(--muted)]">Copied</span>}
         {copyState === "error" && <span className="text-[11px] text-[var(--danger)]">Clipboard unavailable</span>}

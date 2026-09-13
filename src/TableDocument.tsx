@@ -18,7 +18,9 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(100);
   const [dirty, setDirty] = useState(false);
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const [loaded, setLoaded] = useState<{ table: DbTable; result: QueryResult } | null>(null);
+  const result = loaded?.result ?? null;
+  const resultTable = loaded?.table ?? table;
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const columnKey = JSON.stringify(table.columns.map(({ name, type }) => [name, type]));
@@ -34,13 +36,14 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
   const query = `SELECT * FROM ${tableSql(table)}` + (where ? ` WHERE ${where}` : "") + orderBySql(sorts);
   const parameters = JSON.stringify(params);
   useEffect(() => {
+    if (dirty) return;
     const abort = new AbortController();
     setError("");
     dbApi.query(source, query, params, size, page * size, abort.signal).then((r) => {
-      if (!abort.signal.aborted) { setResult(r); onLatency(r.ms); }
+      if (!abort.signal.aborted) { setLoaded({ table, result: r }); onLatency(r.ms); }
     }).catch((e) => { if (!abort.signal.aborted) setError(String(e)); });
     return () => abort.abort();
-  }, [query, parameters, size, page, revision, table]);
+  }, [query, parameters, size, page, revision, table, dirty]);
   const changed = useCallback((value: boolean) => { setDirty(value); onDirty(value); }, [onDirty]);
   const exportAll = async () => {
     const rows: Record<string, unknown>[] = [];
@@ -61,7 +64,7 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
     {error && <div role="alert" className="error">{error}</div>}
     <div className={pane === 'data' ? 'document-body' : 'hidden'}>
       {filterOpen && <DatabaseFilterBuilder model={filter} cols={table.columns} dialect={source.kind} onChange={(value) => { if (!dirty) { setFilter(value); setPage(0); } }} />}
-      <DataGrid table={table} source={source} writable={writable} columns={table.columns.map(c => c.name)} result={result} sorts={sorts} pageSize={size}
+      <DataGrid table={resultTable} source={source} writable={writable} columns={resultTable.columns.map(c => c.name)} result={result} sorts={sorts} pageSize={size}
         onSort={(name, additive) => { setSorts(toggleSort(sorts, name, additive)); setPage(0); }} onPrevious={() => setPage(Math.max(0, page - 1))} onNext={() => setPage(page + 1)}
         onPageSize={(value) => { setSize(value); setPage(0); }} onDirtyChange={changed} onApplied={() => setRevision(revision + 1)} onExportAll={exportAll} />
     </div>

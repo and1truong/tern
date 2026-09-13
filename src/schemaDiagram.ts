@@ -17,9 +17,10 @@ export function schemaRelations(schema: DbSchema): SchemaRelation[] {
   return relations;
 }
 
-function entityName(table: DbTable | string): string {
-  const raw = typeof table === "string" ? table : `${table.schema ? `${table.schema}_` : ""}${table.name}`;
-  return raw.replace(/[^A-Za-z0-9_]/g, "_");
+function entityName(table: Pick<DbTable, "schema" | "name">): string {
+  const label = `${table.schema ? `${table.schema}_` : ""}${table.name}`.replace(/[^A-Za-z0-9_]/g, "_");
+  const identity = JSON.stringify([table.schema ?? null, table.name]);
+  return `${label}_${Array.from(identity, char => char.codePointAt(0)!.toString(16)).join("_")}`;
 }
 
 function mermaidType(type: string): string {
@@ -32,13 +33,13 @@ export function schemaToMermaid(schema: DbSchema): string {
     lines.push(`  ${entityName(table)} {`);
     for (const column of table.columns) {
       const keys = [column.pk ? "PK" : "", column.fk ? "FK" : ""].filter(Boolean).join(",");
-      lines.push(`    ${mermaidType(column.type)} ${entityName(column.name)}${keys ? ` ${keys}` : ""}`);
+      lines.push(`    ${mermaidType(column.type)} ${column.name.replace(/[^A-Za-z0-9_]/g, "_")}${keys ? ` ${keys}` : ""}`);
     }
     lines.push("  }");
   }
   for (const relation of schemaRelations(schema)) {
     const target = schema.tables.find((table) => table.name === relation.toTable || tableKey(table) === relation.toTable);
-    lines.push(`  ${entityName(target ?? relation.toTable)} ||--o{ ${entityName(relation.fromTable)} : "${relation.fromColumn}"`);
+    lines.push(`  ${entityName(target ?? { name: relation.toTable })} ||--o{ ${entityName(relation.fromTable)} : "${relation.fromColumn}"`);
   }
   return lines.join("\n") + "\n";
 }
