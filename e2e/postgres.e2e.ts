@@ -18,7 +18,13 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await dialog.getByRole('button', { name: 'Test Connection' }).click();
     await expect(dialog.getByRole('status')).toContainText('Connected: PostgreSQL');
     await dialog.getByRole('button', { name: 'Save & Connect' }).click();
+    await page.getByRole('combobox', { name: 'Database', exact: true }).selectOption('postgres');
+    await page.getByRole('combobox', { name: 'Database', exact: true }).selectOption('dbm_verify');
     await page.getByRole('button', { name: /verify.users.*3c/ }).click();
+    await page.getByRole('button', { name: 'Remove Docker PostgreSQL', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('Close this connection’s documents before removing it.');
+    await page.getByRole('button', { name: 'Dismiss error', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove Docker PostgreSQL', exact: true })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'User 001', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add row', exact: true })).toBeDisabled();
   });

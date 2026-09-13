@@ -314,3 +314,10 @@ test('large SQLite keys remain exact and mutations target only that row', () => 
   expect(runQuery(path, 'SELECT name FROM large_keys ORDER BY id', []).rows).toEqual([{ name: 'neighbor' }, { name: 'changed' }]);
   expect(runQuery(path, "SELECT replace('abc', 'a', 'z') AS value", []).rows).toEqual([{ value: 'zbc' }]);
 });
+
+test('execution persists writable PRAGMA values for later reads', () => {
+  const path = join(dir, 'pragma-write.sqlite');
+  createDatabase(path);
+  runExec(path, 'PRAGMA user_version = 7');
+  expect(runQuery(path, 'PRAGMA user_version', []).rows).toEqual([{ user_version: 7 }]);
+});

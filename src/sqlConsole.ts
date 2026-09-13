@@ -25,7 +25,7 @@ function structuralWords(sql: string): string[] {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
     }
-    if (ch === "(" || ch === ")" || ch === ",") words.push(ch);
+    if (ch === "(" || ch === ")" || ch === "," || ch === "=") words.push(ch);
     if (/[A-Za-z_]/.test(ch)) {
       const start = i++;
       while (i < sql.length && /[A-Za-z0-9_$]/.test(sql[i])) i++;
@@ -113,6 +113,11 @@ export function firstSqlVerb(sql: string): string {
 export function isWriteSql(sql: string): boolean {
   const words = structuralWords(sql);
   if (!words.length) return false;
+  if (words[0] === "PRAGMA") {
+    if (words.includes("=")) return true;
+    const argument = words.indexOf("(");
+    return argument !== -1 && !["TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_XINFO", "INDEX_LIST", "FOREIGN_KEY_LIST", "INTEGRITY_CHECK", "QUICK_CHECK", "FOREIGN_KEY_CHECK"].includes(words[argument - 1]);
+  }
   if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0])) return true;
   if (words[0] !== "WITH") return false;
   let depth = 0;

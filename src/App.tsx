@@ -117,7 +117,7 @@ export function App() {
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, []);
   const forget = async (s: DbSource) => {
-    if (tabs.some(t => sourceId(t.source) === sourceId(s))) { setError('Close this connection’s documents before removing it.'); return; }
+    if (tabs.some(t => s.kind === 'postgres' ? t.source.kind === 'postgres' && t.source.connId === s.connId : t.source.kind === 'sqlite' && t.source.path === s.path)) { setError('Close this connection’s documents before removing it.'); return; }
     try { if (s.kind === 'postgres') await dbApi.connections.delete(s.connId); else await dbApi.forget(s.path); await refreshConnections(); }
     catch (e) { setError(String(e)); }
   };

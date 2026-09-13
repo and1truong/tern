@@ -91,6 +91,8 @@ pgDescribe("pgServer (live)", () => {
         doubled integer GENERATED ALWAYS AS (amount * 2) STORED
       )`);
       const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_defaults_test' && t.name === 'original')!;
+      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.original DEFAULT VALUES');
+      await runPgExec(url, 'DROP TABLE pgserver_defaults_test.original');
       await runPgExec(url, table.ddl!.replace('"original"', '"copy"'));
       await runPgExec(url, 'INSERT INTO pgserver_defaults_test.copy DEFAULT VALUES');
       await runPgExec(url, 'INSERT INTO pgserver_defaults_test.copy DEFAULT VALUES');

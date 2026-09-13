@@ -62,3 +62,8 @@ test('non-read operations use writable execution without a verb allowlist', () =
   for (const sql of ['ANALYZE users', 'CLUSTER users', 'REFRESH MATERIALIZED VIEW summary', 'SET search_path TO public', 'REASSIGN OWNED BY old TO new']) expect(isWriteSql(sql)).toBe(true);
   for (const sql of ['SHOW search_path', 'SELECT analyze FROM users', 'VALUES (1)', '-- empty']) expect(isWriteSql(sql)).toBe(false);
 });
+
+test('PRAGMA mutations use exec while catalog argument forms remain reads', () => {
+  for (const sql of ['PRAGMA user_version = 7', 'PRAGMA journal_mode = WAL', 'PRAGMA main.user_version(7)', 'PRAGMA foreign_keys(ON)']) expect(isWriteSql(sql)).toBe(true);
+  for (const sql of ['PRAGMA user_version', "PRAGMA table_info('users')", 'PRAGMA main.index_list(users)', "PRAGMA table_info('a=b')"]) expect(isWriteSql(sql)).toBe(false);
+});

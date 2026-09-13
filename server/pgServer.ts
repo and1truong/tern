@@ -163,6 +163,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     const cols = await db.unsafe(
       `SELECT c.table_schema, c.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               c.is_nullable, c.ordinal_position, c.column_default,
+              pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
               t.table_type
          FROM information_schema.columns c
@@ -380,11 +381,13 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       const primaryColumns = keys.filter(row => row.table_schema === t.schema && row.table_name === t.name && row.constraint_type === 'PRIMARY KEY').map(row => String(row.column_name));
       const definitions = t.columns.map(c => {
         const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
-        const generation = c.identity
+        const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')
+          ? ({ smallint: 'smallserial', integer: 'serial', bigint: 'bigserial' } as Record<string, string>)[c.type] : undefined;
+        const generation = serialType ? '' : c.identity
           ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment})`
           : c.generated ? ` GENERATED ALWAYS AS (${metadata.generation_expression}) STORED`
           : c.defaultValue != null ? ` DEFAULT ${c.defaultValue}` : '';
-        return `  "${c.name.replace(/"/g, '""')}" ${c.type}${generation}${c.notNull ? " NOT NULL" : ""}`;
+        return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${generation}${c.notNull ? " NOT NULL" : ""}`;
       });
       if (primaryColumns.length) definitions.push(`  PRIMARY KEY (${primaryColumns.map(name => `"${name.replace(/"/g, '""')}"`).join(', ')})`);
       const body = definitions.join(",\n");
