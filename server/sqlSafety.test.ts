@@ -45,3 +45,10 @@ describe("SQL read-only safety", () => {
     expect(() => assertReadOnlySql("PRAGMA writable_schema")).toThrow(DbError);
   });
 });
+
+test('read expressions do not become write operations', () => {
+  for (const sql of ["SELECT replace('abc', 'a', 'z')", 'WITH x AS (SELECT replace(name, name, name) FROM t) SELECT * FROM x', "EXPLAIN SELECT replace('a','b','c')"]) {
+    expect(assertReadOnlySql(sql)).toBe(sql);
+  }
+  expect(() => assertReadOnlySql('WITH x AS (SELECT 1) DELETE FROM t')).toThrow(DbError);
+});

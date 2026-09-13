@@ -82,6 +82,21 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("empty results retain duplicate column headers and catalog types replay", async () => {
+    const empty = await runPgQuery(url, 'SELECT 1 AS id, 2 AS id WHERE false', []);
+    expect(empty.columns).toEqual(['id', 'id (2)']);
+    expect(empty.rows).toEqual([]);
+    await runPgExec(url, 'CREATE SCHEMA pgserver_types_test');
+    try {
+      await runPgExec(url, "CREATE TYPE pgserver_types_test.mood AS ENUM ('ok')");
+      await runPgExec(url, 'CREATE DOMAIN pgserver_types_test.positive AS numeric CHECK (VALUE > 0)');
+      await runPgExec(url, 'CREATE TABLE pgserver_types_test.original (tags text[], mood pgserver_types_test.mood, amount pgserver_types_test.positive)');
+      const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_types_test' && t.name === 'original')!;
+      expect(table.columns.map(c => c.type)).toEqual(['text[]', 'pgserver_types_test.mood', 'pgserver_types_test.positive']);
+      await runPgExec(url, table.ddl!.replace('"original"', '"copy"'));
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_types_test CASCADE'); }
+  });
+
   test("duplicate labels, exact numeric filters and array exports round-trip", async () => {
     const duplicate = await runPgQuery(url, 'SELECT 11 AS id, 22 AS id, 33 AS "id (2)"', []);
     expect(new Set(duplicate.columns).size).toBe(3);

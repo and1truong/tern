@@ -301,3 +301,16 @@ test('split trigger script executes both body statements', () => {
   expect(runQuery(path, 'SELECT comment FROM posts', []).rows).toEqual([{ comment: 'updated' }]);
   expect(runQuery(path, 'SELECT message FROM logs', []).rows).toEqual([{ message: 'logged' }]);
 });
+
+test('large SQLite keys remain exact and mutations target only that row', () => {
+  const path = join(dir, 'large-key.sqlite');
+  createDatabase(path);
+  runExec(path, "CREATE TABLE large_keys (id INTEGER PRIMARY KEY, name TEXT)");
+  runExec(path, "INSERT INTO large_keys VALUES (9007199254740992, 'neighbor'), (9007199254740993, 'target')");
+  const row = runQuery(path, 'SELECT * FROM large_keys ORDER BY id DESC', []).rows[0];
+  expect(row.id).toBe('9007199254740993');
+  expect(() => JSON.stringify(row)).not.toThrow();
+  runRowChanges(path, [{ kind: 'update', table: { name: 'large_keys' }, key: { id: row.id }, expected: { name: row.name }, values: { name: 'changed' } }]);
+  expect(runQuery(path, 'SELECT name FROM large_keys ORDER BY id', []).rows).toEqual([{ name: 'neighbor' }, { name: 'changed' }]);
+  expect(runQuery(path, "SELECT replace('abc', 'a', 'z') AS value", []).rows).toEqual([{ value: 'zbc' }]);
+});

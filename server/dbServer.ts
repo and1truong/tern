@@ -21,12 +21,12 @@ function resolvePath(raw: string): string {
   return normalize(p);
 }
 
-function openRead(path: string): Database {
+function openRead(path: string, safeIntegers = false): Database {
   let st;
   try { st = statSync(path); } catch { throw new DbError("not_found", "database file not found"); }
   if (!st.isFile()) throw new DbError("not_found", "not a file");
   try {
-    const db = new Database(path, { readonly: true });
+    const db = new Database(path, { readonly: true, safeIntegers });
     db.exec("PRAGMA foreign_keys = ON");
     return db;
   }
@@ -185,7 +185,7 @@ export function runQuery(pathRaw: string, sql: string, params: unknown[], limitR
   const limit = Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
   const offset = Math.max(Math.floor(offsetRaw ?? 0), 0);
   const boundedSql = boundReadSql(sql, limit, offset);
-  const db = openRead(resolvePath(pathRaw));
+  const db = openRead(resolvePath(pathRaw), true);
   try {
     const t0 = performance.now();
     const stmt = db.prepare(boundedSql);

@@ -161,11 +161,14 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
   try {
     // Tables + views in user schemas, with column lists in one shot.
     const cols = await db.unsafe(
-      `SELECT c.table_schema, c.table_name, c.column_name, c.data_type,
+      `SELECT c.table_schema, c.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               c.is_nullable, c.ordinal_position, c.column_default,
               c.is_identity, c.is_generated,
               t.table_type
          FROM information_schema.columns c
+         JOIN pg_namespace n ON n.nspname = c.table_schema
+         JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = c.table_name
+         JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name
          JOIN information_schema.tables t
            ON t.table_schema = c.table_schema AND t.table_name = c.table_name
         WHERE c.table_schema NOT IN ('pg_catalog','information_schema')
@@ -508,7 +511,7 @@ export async function runPgQuery(
     const explain = /^\s*EXPLAIN\b/i.test(boundedSql);
     // Bun values() preserves native values but exposes no column names. Carry
     // labels alongside positional values; json_object_keys retains duplicate keys.
-    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json("__dbm_result"))), "__dbm_result".* FROM (${boundedSql}) AS "__dbm_result"`;
+    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json((SELECT "__dbm_shape" FROM (SELECT "__dbm_result".*) AS "__dbm_shape")))), "__dbm_result".* FROM (VALUES (1)) AS "__dbm_seed" LEFT JOIN LATERAL (SELECT TRUE AS "__dbm_present", "__dbm_rows".* FROM (${boundedSql}) AS "__dbm_rows") AS "__dbm_result" ON TRUE`;
     try {
       const query = connection.unsafe(toPgPlaceholders(positionalSql, params.length), params).values();
       rows = await controlledPg(url, connection, query, signal, timeoutMs) as unknown[][];
@@ -516,7 +519,8 @@ export async function runPgQuery(
       if (e instanceof DbError) throw e;
       throw new DbError("sql", e instanceof Error ? e.message : String(e));
     }
-    const labels = explain ? ['QUERY PLAN'] : (rows[0]?.[0] ?? []) as string[];
+    const labels = explain ? ['QUERY PLAN'] : ((rows[0]?.[0] ?? []) as string[]).slice(1);
+    if (!explain) rows = rows.filter(row => row[1] === true);
     const used = new Set(labels);
     const seen = new Set<string>();
     const columns = labels.map(label => {
@@ -529,7 +533,7 @@ export async function runPgQuery(
       return key;
     });
     const ms = Math.round((performance.now() - t0) * 10) / 10;
-    const wireRows = rows.slice(0, limit).map(row => Object.fromEntries(columns.map((column, i) => [column, encodeDbValue(row[i + (explain ? 0 : 1)])])));
+    const wireRows = rows.slice(0, limit).map(row => Object.fromEntries(columns.map((column, i) => [column, encodeDbValue(row[i + (explain ? 0 : 2)])])));
     return { columns, rows: wireRows, ms, hasMore: rows.length > limit, offset };
   } finally {
     if (inTransaction) await connection.unsafe("ROLLBACK").catch(() => {});

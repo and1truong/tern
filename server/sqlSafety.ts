@@ -71,14 +71,14 @@ function scanSqlTokens(sql: string): SqlToken[] {
       tokens.push({ value: sql.slice(start, i).toUpperCase(), start, end: i });
       continue;
     }
-    if (ch === ";") tokens.push({ value: ";", start: i, end: i + 1 });
+    if ([";", "(", ")", ","].includes(ch)) tokens.push({ value: ch, start: i, end: i + 1 });
     i++;
   }
   return tokens;
 }
 
 export function sqlTokens(sql: string): string[] {
-  return scanSqlTokens(sql).map((token) => token.value);
+  return scanSqlTokens(sql).map((token) => token.value).filter(value => !["(", ")", ","].includes(value));
 }
 
 export function normalizeSingleStatement(sql: string): string {
@@ -111,7 +111,20 @@ export function assertReadOnlySql(sql: string): string {
     const name = tokens[1] ?? "";
     if (!READ_PRAGMAS.has(name) || normalized.includes("=")) throw new DbError("not_read_only", `PRAGMA ${name || "statement"} is not an approved read`);
   }
-  const write = tokens.find((token) => WRITE_TOKENS.has(token));
+  const structure = scanSqlTokens(normalized).map(token => token.value);
+  let depth = 0;
+  let explainOperation = verb === "EXPLAIN";
+  let withMain = verb === "WITH" || (verb === "EXPLAIN" && structure.includes("WITH"));
+  const write = structure.find((token, i) => {
+    if (token === "(") depth++;
+    if (token === ")") depth--;
+    const body = structure[i - 1] === "(" && ["AS", "MATERIALIZED"].includes(structure[i - 2]);
+    const main = withMain && depth === 0 && structure[i - 1] === ")";
+    if (main && (READ_VERBS.has(token) || WRITE_TOKENS.has(token))) withMain = false;
+    const operation = i === 0 || body || main || explainOperation;
+    if (explainOperation && i > 0 && (READ_VERBS.has(token) || WRITE_TOKENS.has(token))) explainOperation = false;
+    return operation && WRITE_TOKENS.has(token);
+  });
   if (write) throw new DbError("not_read_only", `read-only query contains ${write}`);
   return normalized;
 }

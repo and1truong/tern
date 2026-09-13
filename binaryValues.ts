@@ -46,6 +46,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export function encodeDbValue(value: unknown): unknown {
+  if (typeof value === "bigint") return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
   if (value instanceof Uint8Array) {
     return { [WIRE_TAG]: { kind: "binary", base64: bytesToBase64(value) } };
   }
