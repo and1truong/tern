@@ -21,6 +21,7 @@ export function App() {
   const [active, setActive] = useState('');
   const [ready, setReady] = useState(false);
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
+  const initializedAccess = useRef(new Set<string>());
   const [writable, setWritable] = useState<Record<string, boolean>>({});
   const [latency, setLatency] = useState(0);
   const [error, setError] = useState('');
@@ -44,6 +45,12 @@ export function App() {
       if (source.kind === "postgres") {
         const result = await dbApi.databases(source);
         setDatabases(s => ({ ...s, [source.connId]: result.databases }));
+      }
+      if (!initializedAccess.current.has(key)) {
+        const defaultWritable = source.kind === 'postgres' && source.readOnly === false;
+        await dbApi.access(source, defaultWritable);
+        initializedAccess.current.add(key);
+        setWritable(s => ({ ...s, [key]: defaultWritable }));
       }
       setSchemas(s => ({ ...s, [key]: schema }));
       setStates(s => ({ ...s, [key]: 'Connected' }));

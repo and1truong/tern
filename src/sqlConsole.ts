@@ -1,7 +1,7 @@
 export interface SqlSelection { from: number; to: number }
 
 const WRITE_VERBS = new Set([
-  "ALTER", "ATTACH", "CREATE", "DELETE", "DETACH", "DROP", "GRANT", "INSERT",
+  "CALL", "DO", "COMMENT", "ALTER", "ATTACH", "CREATE", "DELETE", "DETACH", "DROP", "GRANT", "INSERT",
   "MERGE", "REINDEX", "REPLACE", "REVOKE", "TRUNCATE", "UPDATE", "VACUUM",
 ]);
 

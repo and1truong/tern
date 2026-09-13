@@ -69,3 +69,30 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     expect(errors).toEqual([]);
   });
 });
+
+test('saved writable default applies on connect and reload but refresh preserves manual read-only', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New connection', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connection manager' });
+  await dialog.getByLabel('Name', { exact: true }).fill('Writable PostgreSQL');
+  await dialog.getByLabel('Host', { exact: true }).fill('127.0.0.1');
+  await dialog.getByLabel('Port', { exact: true }).fill('15432');
+  await dialog.getByLabel('Database', { exact: true }).fill('dbm_verify');
+  await dialog.getByLabel('Username', { exact: true }).fill('dbm');
+  await dialog.getByLabel('Default to read-only').uncheck();
+  await dialog.getByRole('button', { name: 'Save & Connect' }).click();
+  await expect(page.getByRole('button', { name: '● Writable', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'SQL', exact: true }).click();
+  await page.locator('.cm-content[contenteditable=true]:visible').pressSequentially("DO $$ BEGIN INSERT INTO verify.orders VALUES (3, 1, 7); END $$;");
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect.poll(() => sql('SELECT count(*) FROM verify.orders WHERE id=3')).toBe('1');
+  await expect(page.getByRole('tab', { name: /Query.*●/ })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('button', { name: '● Writable', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '● Writable', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Read Only', exact: true })).toBeVisible();
+  const catalog = page.waitForResponse(response => response.url().includes('/api/schema'));
+  await page.getByRole('button', { name: 'Refresh catalog', exact: true }).click();
+  await catalog;
+  await expect(page.getByRole('button', { name: 'Read Only', exact: true })).toBeVisible();
+});

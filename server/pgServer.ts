@@ -453,6 +453,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+          AND p.prokind IN ('f', 'p', 'w')
         ORDER BY n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)`,
     ) as Record<string, unknown>[];
     const routines = routineRows.map((row) => ({

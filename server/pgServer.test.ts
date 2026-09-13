@@ -80,6 +80,17 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("catalog skips aggregates while retaining functions and procedures", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_aggregate_test');
+    try {
+      await runPgExec(url, `CREATE AGGREGATE pgserver_aggregate_test.total(integer) (SFUNC = int4pl, STYPE = integer, INITCOND = '0')`);
+      await runPgExec(url, `CREATE FUNCTION pgserver_aggregate_test.answer() RETURNS integer LANGUAGE sql AS 'SELECT 42'`);
+      await runPgExec(url, `CREATE PROCEDURE pgserver_aggregate_test.noop() LANGUAGE sql AS 'SELECT 1'`);
+      const schema = await readPgSchema(url);
+      expect(schema.routines?.filter(r => r.schema === 'pgserver_aggregate_test').map(r => r.name).sort()).toEqual(['answer()', 'noop()']);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_aggregate_test CASCADE'); }
+  });
+
   test("exec rejects nothing / read+schema round-trip", async () => {
     await runPgExec(url, `DROP TABLE IF EXISTS ${T}`);
     await runPgExec(url, `DROP TYPE IF EXISTS ${T}_mood`);

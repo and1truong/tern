@@ -24,6 +24,13 @@ describe("SQL console statement selection", () => {
     }
   });
 
+  test("routes procedural and metadata commands through writable execution", () => {
+    for (const sql of ["CALL refresh_data()", "DO $$ BEGIN NULL; END $$", "COMMENT ON TABLE users IS 'Users'"]) {
+      expect(isWriteSql(sql)).toBe(true);
+    }
+    expect(isWriteSql("SELECT 'CALL DO COMMENT'")).toBe(false);
+  });
+
   test("finds the first verb after comments", () => {
     expect(firstSqlVerb("-- note\n/* plan */ UPDATE users SET n=1")).toBe("UPDATE");
   });
