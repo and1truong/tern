@@ -5,7 +5,7 @@ import { join, isAbsolute, normalize } from "node:path";
 import { homedir } from "node:os";
 import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, DatabaseInsights, MigrationResult } from "../shared.ts";
 import { DbError } from "../shared.ts";
-import { assertReadOnlySql, boundReadSql } from "./sqlSafety.ts";
+import { assertReadOnlySql, boundReadSql, normalizeSingleStatement, sqlTokens } from "./sqlSafety.ts";
 import { compileRowChanges } from "./rowMutations.ts";
 import { encodeDbValue } from "../binaryValues.ts";
 export { DbError } from "../shared.ts";
@@ -32,12 +32,12 @@ function openRead(path: string, safeIntegers = false): Database {
   }
   catch { throw new DbError("not_a_database", "could not open as sqlite (read-only)"); }
 }
-function openWrite(path: string): Database {
+function openWrite(path: string, safeIntegers = false): Database {
   let st;
   try { st = statSync(path); } catch { throw new DbError("not_found", "database file not found"); }
   if (!st.isFile()) throw new DbError("not_found", "not a file");
   try {
-    const db = new Database(path);
+    const db = new Database(path, { safeIntegers });
     db.exec("PRAGMA foreign_keys = ON");
     return db;
   }
@@ -220,17 +220,28 @@ export function explainQuery(pathRaw: string, sql: string, params: unknown[]): Q
 }
 
 export function runExec(pathRaw: string, sql: string): ExecResult {
-  const db = openWrite(resolvePath(pathRaw));
+  const db = openWrite(resolvePath(pathRaw), true);
   try {
     const t0 = performance.now();
     let rowsAffected = 0;
+    let result: QueryResult | undefined;
     try {
-      db.exec(sql);
-      rowsAffected = db.query<{ c: number }, []>("SELECT changes() AS c").get()?.c ?? 0;
+      let returning = false;
+      try { returning = sqlTokens(normalizeSingleStatement(sql, "sqlite"), "sqlite").includes("RETURNING"); }
+      catch (error) { if (!(error instanceof DbError) || error.code !== "multi_statement") throw error; }
+      if (returning) {
+        const statement = db.prepare(sql);
+        const labels = statement.columnNames;
+        const columns = new Set(labels).size === labels.length ? labels : labels.map((_, index) => `Column ${index + 1}`);
+        const rows = statement.values() as unknown[][];
+        result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
+      } else db.exec(sql);
+      rowsAffected = Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);
     }
     catch (e) { throw new DbError("sql", e instanceof Error ? e.message : String(e)); }
     const ms = Math.round((performance.now() - t0) * 10) / 10;
-    return { rowsAffected, ms };
+    if (result) result.ms = ms;
+    return { rowsAffected, ms, ...(result ? { result } : {}) };
   } finally {
     db.close();
   }

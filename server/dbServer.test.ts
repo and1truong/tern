@@ -372,3 +372,25 @@ test('SQLite retains all foreign keys sharing one source column', () => {
   expect([schema.tables.find(t => t.name === 'child')!.columns[0].fk].flat().sort()).toEqual(['a(id)', 'b(id)']);
   expect(schema.constraints?.filter(c => c.table === 'child' && c.type === 'FOREIGN KEY')).toHaveLength(2);
 });
+
+test('SQLite foreign_key_check works in read-only mode with and without table argument', () => {
+  const path = join(dir, 'foreign-check.sqlite');
+  seed(path);
+  const db = new Database(path);
+  db.exec("PRAGMA foreign_keys=OFF; INSERT INTO posts(user_id) VALUES(999)");
+  db.close();
+  for (const query of ['PRAGMA foreign_key_check', 'PRAGMA foreign_key_check(posts)']) {
+    expect(runQuery(path, query, []).rows).toHaveLength(1);
+  }
+});
+
+test('SQLite DML RETURNING executes once and preserves requested values', () => {
+  const path = join(dir, 'returning.sqlite');
+  seed(path);
+  const inserted = runExec(path, "INSERT INTO users(email) VALUES('returned') RETURNING id, email");
+  expect(inserted.result?.rows).toEqual([{ id: 3, email: 'returned' }]);
+  expect(inserted.rowsAffected).toBe(1);
+  expect(runExec(path, "UPDATE users SET age=age WHERE id=3 RETURNING 9007199254740993 AS exact").result?.rows).toEqual([{ exact: '9007199254740993' }]);
+  expect(runExec(path, 'DELETE FROM users WHERE id=3 RETURNING id AS x, id+1 AS x').result?.rows).toEqual([{ 'Column 1': 3, 'Column 2': 4 }]);
+  expect(runQuery(path, 'SELECT count(*) AS n FROM users', []).rows).toEqual([{ n: 2 }]);
+});
