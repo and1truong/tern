@@ -1,7 +1,7 @@
 import { serializeRows } from "../src/dataTransfer.ts";
 import { compileGroup } from "../src/dbFilter.ts";
 import { describe, test, expect } from "bun:test";
-import { collectPgKeyMetadata, toPgPlaceholders, readPgSchema, runPgQuery, runPgExec } from "./pgServer.ts";
+import { collectPgKeyMetadata, toPgPlaceholders, readPgSchema, runPgQuery, runPgExec, runPgRowChanges, runPgMigration } from "./pgServer.ts";
 import { DbError } from "../shared.ts";
 
 describe("toPgPlaceholders", () => {
@@ -101,6 +101,18 @@ pgDescribe("pgServer (live)", () => {
         { id: 12, serial_id: 2, amount: 7, doubled: 14 },
       ]);
     } finally { await runPgExec(url, 'DROP SCHEMA pgserver_defaults_test CASCADE'); }
+  });
+
+  test("quoted mutation identifiers and migration rollback guard", async () => {
+    const table = { schema: 'public', name: 'pgserver_question_test' };
+    await runPgExec(url, 'CREATE TABLE public.pgserver_question_test (id integer PRIMARY KEY, "why?" text)');
+    try {
+      await runPgRowChanges(url, [{ kind: 'insert', table, values: { id: 1, 'why?': 'before' } }]);
+      await runPgRowChanges(url, [{ kind: 'update', table, key: { id: 1 }, expected: { 'why?': 'before' }, values: { 'why?': 'after' } }]);
+      expect((await runPgQuery(url, 'SELECT "why?" FROM public.pgserver_question_test', [])).rows).toEqual([{ 'why?': 'after' }]);
+      await expect(runPgMigration(url, "INSERT INTO public.pgserver_question_test VALUES (2, 'bad'); SELECT '\\'; COMMIT; SELECT '';", false)).rejects.toThrow();
+      expect((await runPgQuery(url, 'SELECT id FROM public.pgserver_question_test ORDER BY id', [])).rows).toEqual([{ id: 1 }]);
+    } finally { await runPgExec(url, 'DROP TABLE public.pgserver_question_test'); }
   });
 
   test("DDL replay enforces unique, foreign key, check and exclusion constraints", async () => {

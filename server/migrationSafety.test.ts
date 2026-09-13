@@ -5,3 +5,9 @@ test('migration validation rejects commit aliases and external SQLite files but 
   expect(validateMigrationSql('CREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT INTO b VALUES (CASE WHEN 1 THEN 2 END); END;')).toContain('TRIGGER');
   expect(() => validateMigrationSql('CREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT INTO b VALUES(1); END; END;')).toThrow();
 });
+
+test('migration comment parsing follows the database dialect', () => {
+  const sql = 'SELECT 1; /* outer /* inner */ COMMIT; /* */';
+  expect(() => validateMigrationSql(sql, 'sqlite')).toThrow();
+  expect(validateMigrationSql(sql, 'postgres')).toBe(sql);
+});

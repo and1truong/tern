@@ -321,3 +321,19 @@ test('execution persists writable PRAGMA values for later reads', () => {
   runExec(path, 'PRAGMA user_version = 7');
   expect(runQuery(path, 'PRAGMA user_version', []).rows).toEqual([{ user_version: 7 }]);
 });
+
+test('migration preview rejects COMMIT hidden after an ordinary backslash string', () => {
+  const path = join(dir, 'migration-backslash.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t (v integer)');
+  expect(() => runMigration(path, "INSERT INTO t VALUES (1); SELECT '\\'; COMMIT; SELECT '';", false)).toThrow();
+  expect(runQuery(path, 'SELECT * FROM t', []).rows).toEqual([]);
+});
+
+test('SQLite non-nesting comments cannot conceal a migration COMMIT', () => {
+  const path = join(dir, 'migration-comment.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t (v integer)');
+  expect(() => runMigration(path, 'INSERT INTO t VALUES (1); /* outer /* inner */ COMMIT; /* */', false)).toThrow();
+  expect(runQuery(path, 'SELECT * FROM t', []).rows).toEqual([]);
+});

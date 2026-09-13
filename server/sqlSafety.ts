@@ -17,7 +17,7 @@ const WRITE_TOKENS = new Set([
 // identifiers, and comments are deliberately excluded from the token stream.
 interface SqlToken { value: string; start: number; end: number }
 
-function scanSqlTokens(sql: string): SqlToken[] {
+function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres"): SqlToken[] {
   const tokens: SqlToken[] = [];
   let i = 0;
   while (i < sql.length) {
@@ -32,7 +32,7 @@ function scanSqlTokens(sql: string): SqlToken[] {
       let depth = 1;
       i += 2;
       while (i < sql.length && depth) {
-        if (sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; }
+        if (dialect === "postgres" && sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; }
         else if (sql[i] === "*" && sql[i + 1] === "/") { depth--; i += 2; }
         else i++;
       }
@@ -40,6 +40,7 @@ function scanSqlTokens(sql: string): SqlToken[] {
     }
     if (ch === "'" || ch === '"' || ch === "`") {
       const quote = ch;
+      const backslashEscapes = dialect === "postgres" && quote === "'" && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
       i++;
       while (i < sql.length) {
         if (sql[i] === quote) {
@@ -47,7 +48,7 @@ function scanSqlTokens(sql: string): SqlToken[] {
           i++;
           break;
         }
-        if (sql[i] === "\\" && quote !== '"') i += 2;
+        if (sql[i] === "\\" && backslashEscapes) i += 2;
         else i++;
       }
       continue;
@@ -77,13 +78,13 @@ function scanSqlTokens(sql: string): SqlToken[] {
   return tokens;
 }
 
-export function sqlTokens(sql: string): string[] {
-  return scanSqlTokens(sql).map((token) => token.value).filter(value => !["(", ")", ","].includes(value));
+export function sqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string[] {
+  return scanSqlTokens(sql, dialect).map((token) => token.value).filter(value => !["(", ")", ","].includes(value));
 }
 
-export function normalizeSingleStatement(sql: string): string {
+export function normalizeSingleStatement(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string {
   const trimmed = sql.trim();
-  const scanned = scanSqlTokens(trimmed);
+  const scanned = scanSqlTokens(trimmed, dialect);
   const tokens = scanned.map((token) => token.value);
   const semicolons = tokens.reduce<number[]>((out, token, i) => {
     if (token === ";") out.push(i);
@@ -100,9 +101,9 @@ export function normalizeSingleStatement(sql: string): string {
     : trimmed;
 }
 
-export function assertReadOnlySql(sql: string): string {
-  const normalized = normalizeSingleStatement(sql);
-  const tokens = sqlTokens(normalized);
+export function assertReadOnlySql(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string {
+  const normalized = normalizeSingleStatement(sql, dialect);
+  const tokens = sqlTokens(normalized, dialect);
   const verb = tokens[0] ?? "";
   if (!READ_VERBS.has(verb)) {
     throw new DbError("not_read_only", `statement must start with SELECT/WITH/EXPLAIN/VALUES or SHOW/read PRAGMA (got "${verb}")`);
@@ -111,7 +112,7 @@ export function assertReadOnlySql(sql: string): string {
     const name = tokens[1] ?? "";
     if (!READ_PRAGMAS.has(name) || normalized.includes("=")) throw new DbError("not_read_only", `PRAGMA ${name || "statement"} is not an approved read`);
   }
-  const structure = scanSqlTokens(normalized).map(token => token.value);
+  const structure = scanSqlTokens(normalized, dialect).map(token => token.value);
   let depth = 0;
   let explainOperation = verb === "EXPLAIN";
   let withMain = verb === "WITH" || (verb === "EXPLAIN" && structure.includes("WITH"));
@@ -129,9 +130,9 @@ export function assertReadOnlySql(sql: string): string {
   return normalized;
 }
 
-export function boundReadSql(sql: string, limit: number, offset = 0): string {
-  const normalized = assertReadOnlySql(sql);
-  const verb = sqlTokens(normalized)[0];
+export function boundReadSql(sql: string, limit: number, offset = 0, dialect: "sqlite" | "postgres" = "postgres"): string {
+  const normalized = assertReadOnlySql(sql, dialect);
+  const verb = sqlTokens(normalized, dialect)[0];
   if (verb === "EXPLAIN" || verb === "PRAGMA" || verb === "SHOW") return normalized;
   return `SELECT * FROM (${normalized}\n) AS "__dbm_query" LIMIT ${limit + 1} OFFSET ${offset}`;
 }

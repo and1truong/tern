@@ -1,10 +1,10 @@
 import { DbError } from "../shared.ts";
 import { sqlTokens } from "./sqlSafety.ts";
 
-export function validateMigrationSql(sql: string): string {
+export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string {
   const script = sql.trim();
   if (!script || script.length > 1_000_000) throw new DbError('sql', 'Migration must contain SQL and fit within 1 MB');
-  const tokens = sqlTokens(script);
+  const tokens = sqlTokens(script, dialect);
   let first = true;
   let trigger = false;
   let depth = 0;

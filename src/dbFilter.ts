@@ -56,10 +56,10 @@ export function newGroup(): FilterGroup {
 }
 
 export function isNumericType(t: string): boolean {
-  const u = t.toUpperCase();
-  return u.includes("INT") || u.includes("REAL") || u.includes("FLOA") || u.includes("NUM") || u.includes("DEC") || u.includes("DOUBLE");
+  return /^(?:tinyint|smallint|mediumint|bigint|integer|int[248]?|int64|real|float[48]?|double(?: precision)?|numeric|decimal|number)(?:\s*\([^)]*\))?$/i.test(t.trim());
 }
 function isTextType(type: string): boolean {
+  if (type.trim().endsWith("[]")) return false;
   return /^(text|varchar|character varying|character|char|citext)(\b|\()/i.test(type);
 }
 export function opsFor(type: string, dialect: DbDialect = "sqlite") {

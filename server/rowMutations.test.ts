@@ -43,3 +43,9 @@ describe("structured row mutations", () => {
     })).toThrow(DbError);
   });
 });
+
+test('PostgreSQL mutation placeholders skip quoted identifiers', () => {
+  const statement = compileRowChange({ kind: 'update', table: { name: 'why?"table' }, key: { id: 1 }, expected: { 'why?': 'before' }, values: { 'why?': 'after' } });
+  expect(toPostgresMutationSql(statement.sql)).toBe('UPDATE "why?""table" SET "why?" = $1 WHERE "id" IS NOT DISTINCT FROM $2 AND "why?" IS NOT DISTINCT FROM $3');
+  expect(statement.params).toEqual(['after', 1, 'before']);
+});

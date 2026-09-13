@@ -121,3 +121,11 @@ test('PostgreSQL nontext scalars default to equality and legacy text rules cast 
   }
   expect(defaultOp('text', 'postgres')).toBe('contains');
 });
+
+test('PostgreSQL array and nonnumeric types retain typed equality parameters', () => {
+  for (const [type, value] of [['integer[]', '{1,2}'], ['text[]', '{a,b}'], ['interval', '1 day'], ['point', '(1,2)']]) {
+    const columns: DbColumn[] = [{ name: 'v', type, notNull: false, pk: false, fk: null }];
+    expect(defaultOp(type, 'postgres')).toBe('equals');
+    expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value }] }, columns, 'postgres').params).toEqual([value]);
+  }
+});

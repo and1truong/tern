@@ -178,13 +178,13 @@ export function readInsights(pathRaw: string): DatabaseInsights {
 // A single read-only statement: first verb must be SELECT/WITH/EXPLAIN/PRAGMA-select,
 // and the body must not contain a statement-separating ";" followed by more SQL.
 export function assertReadOnly(sql: string): void {
-  assertReadOnlySql(sql);
+  assertReadOnlySql(sql, "sqlite");
 }
 
 export function runQuery(pathRaw: string, sql: string, params: unknown[], limitRaw?: number, offsetRaw?: number): QueryResult {
   const limit = Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
   const offset = Math.max(Math.floor(offsetRaw ?? 0), 0);
-  const boundedSql = boundReadSql(sql, limit, offset);
+  const boundedSql = boundReadSql(sql, limit, offset, "sqlite");
   const db = openRead(resolvePath(pathRaw), true);
   try {
     const t0 = performance.now();
@@ -202,7 +202,7 @@ export function runQuery(pathRaw: string, sql: string, params: unknown[], limitR
 }
 
 export function explainQuery(pathRaw: string, sql: string, params: unknown[]): QueryResult {
-  const normalized = assertReadOnlySql(sql);
+  const normalized = assertReadOnlySql(sql, "sqlite");
   const db = openRead(resolvePath(pathRaw));
   try {
     const t0 = performance.now();
@@ -237,7 +237,7 @@ export function runExec(pathRaw: string, sql: string): ExecResult {
 }
 
 export function runMigration(pathRaw: string, sql: string, apply: boolean): MigrationResult {
-  const script = validateMigrationSql(sql);
+  const script = validateMigrationSql(sql, "sqlite");
   const db = openWrite(resolvePath(pathRaw));
   const t0 = performance.now();
   let transaction = false;

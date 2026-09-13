@@ -57,3 +57,10 @@ test('SHOW bypasses the subquery wrapper without allowing multiple statements', 
   expect(boundReadSql('SHOW search_path', 10)).toBe('SHOW search_path');
   expect(() => boundReadSql('SHOW search_path; DELETE FROM t', 10)).toThrow(DbError);
 });
+
+test('ordinary backslashes cannot conceal a transaction command', () => {
+  const script = "INSERT INTO t VALUES (1); SELECT '\\'; COMMIT; SELECT '';";
+  expect(sqlTokens(script)).toContain('COMMIT');
+  expect(() => assertReadOnlySql("SELECT '\\'; COMMIT; SELECT '';" )).toThrow(DbError);
+  expect(assertReadOnlySql("SELECT E'escaped \\\' COMMIT; text' AS value")).toContain('SELECT');
+});

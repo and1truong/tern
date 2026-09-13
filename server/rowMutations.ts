@@ -67,7 +67,8 @@ export function compileRowChanges(changes: RowChange[]): RowChangeStatement[] {
 
 export function toPostgresMutationSql(sql: string): string {
   let parameter = 0;
-  return sql.replace(/ IS \?|\?/g, (token) => {
+  return sql.replace(/"(?:""|[^"])*"| IS \?|\?/g, (token) => {
+    if (token.startsWith('"')) return token;
     const placeholder = `$${++parameter}`;
     return token === "?" ? placeholder : ` IS NOT DISTINCT FROM ${placeholder}`;
   });
