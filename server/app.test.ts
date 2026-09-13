@@ -1,0 +1,43 @@
+import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openAppDatabase } from "./appDatabase.ts";
+import { makeApp } from "./app.ts";
+
+test("standalone API persists state and recent files, denies implicit access/writes, and gates migration apply", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'dbm-app-')));
+  const path = join(dir, 'user.sqlite');
+  const user = new Database(path); user.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES (1, \'Ada\')'); user.close();
+  let db = openAppDatabase(join(dir, 'app.sqlite'));
+  let app = makeApp(db);
+  const post = (route: string, body: unknown, headers = {}) => app(new Request(`http://localhost/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }));
+  try {
+    expect((await post('query', { path, sql: 'SELECT * FROM users' })).status).toBe(403);
+    expect((await post('open', { path }, { origin: 'https://evil.example' })).status).toBe(403);
+    expect((await post('open', { path })).status).toBe(200);
+    expect((await post('query', { path, sql: 'DELETE FROM users' })).status).toBe(400);
+    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
+    expect((await post('access', { path, writable: true })).status).toBe(200);
+    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true }, { 'x-dbm-session': 'new-window' })).status).toBe(403);
+    const migration = { path, sql: 'CREATE TABLE audit(id INTEGER)', allowWrite: true };
+    expect((await post('migration/apply', migration)).status).toBe(400);
+    expect((await post('migration/preview', migration)).status).toBe(200);
+    const check = new Database(path, { readonly: true });
+    expect(check.query("SELECT name FROM sqlite_master WHERE name='audit'").get()).toBeNull(); check.close();
+    expect((await post('migration/apply', { ...migration, sql: 'CREATE TABLE other(id)' })).status).toBe(400);
+    expect((await post('migration/apply', migration)).status).toBe(200);
+    const changes = [{ kind: 'update', table: { name: 'users' }, key: { id: 1 }, expected: { name: 'Ada' }, values: { name: 'Grace' } }];
+    expect((await post('rows/apply', { path, changes, allowWrite: true })).status).toBe(200);
+    expect((await post('rows/apply', { path, changes, allowWrite: true })).status).toBe(409);
+    await post('state', { key: 'sql:test', value: { sql: 'SELECT 42', history: ['SELECT 1'] } });
+    db.close(); db = openAppDatabase(join(dir, 'app.sqlite')); app = makeApp(db);
+    const saved = await app(new Request('http://localhost/api/state?key=sql:test'));
+    expect(await saved.json()).toEqual({ sql: 'SELECT 42', history: ['SELECT 1'] });
+    const recent = await app(new Request('http://localhost/api/recent'));
+    expect((await recent.json()).databases[0].path).toBe(path);
+    await post('open', { path });
+    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
