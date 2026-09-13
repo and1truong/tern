@@ -105,7 +105,7 @@ export function assertReadOnlySql(sql: string, dialect: "sqlite" | "postgres" = 
   const normalized = normalizeSingleStatement(sql, dialect);
   const tokens = sqlTokens(normalized, dialect);
   const verb = tokens[0] ?? "";
-  if (!READ_VERBS.has(verb)) {
+  if (!READ_VERBS.has(verb) && !(dialect === "postgres" && verb === "TABLE")) {
     throw new DbError("not_read_only", `statement must start with SELECT/WITH/EXPLAIN/VALUES or SHOW/read PRAGMA (got "${verb}")`);
   }
   if (verb === "PRAGMA") {

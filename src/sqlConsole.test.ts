@@ -169,3 +169,9 @@ test('ambiguous BEGIN identifiers in trigger headers cannot swallow following st
   }
   expect(splitSqlStatements('CREATE TRIGGER "begin" AFTER INSERT ON "begin" BEGIN SELECT CASE WHEN 1 THEN 1 END; END; SELECT 1;', 'sqlite')).toHaveLength(2);
 });
+
+test("PostgreSQL TABLE shorthand is read-only unless it locks rows", () => {
+  expect(isWriteSql('TABLE public.users', 'postgres')).toBe(false);
+  expect(isWriteSql('TABLE public.users FOR UPDATE', 'postgres')).toBe(true);
+  expect(isWriteSql('TABLE public.users', 'sqlite')).toBe(true);
+});

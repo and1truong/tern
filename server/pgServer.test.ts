@@ -84,6 +84,25 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("owned sequence DDL preserves its custom name, options and dependency", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_owned_test');
+    try {
+      await runPgExec(url, `CREATE SEQUENCE pgserver_owned_test."custom ids" AS bigint START 30 INCREMENT 7 MINVALUE 2 MAXVALUE 900 CACHE 3 CYCLE;
+        CREATE TABLE pgserver_owned_test.t (id bigint DEFAULT nextval('pgserver_owned_test."custom ids"'));
+        ALTER SEQUENCE pgserver_owned_test."custom ids" OWNED BY pgserver_owned_test.t.id;`);
+      const ddl = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_owned_test' && t.name === 't')!.ddl!;
+      await runPgExec(url, 'DROP TABLE pgserver_owned_test.t');
+      await runPgExec(url, ddl);
+      await runPgExec(url, 'INSERT INTO pgserver_owned_test.t DEFAULT VALUES; INSERT INTO pgserver_owned_test.t DEFAULT VALUES');
+      expect((await runPgQuery(url, 'SELECT id FROM pgserver_owned_test.t ORDER BY id', [])).rows).toEqual([{ id: '30' }, { id: '37' }]);
+      expect((await runPgQuery(url, 'TABLE pgserver_owned_test.t', [], 1)).hasMore).toBe(true);
+      expect((await runPgQuery(url, "SELECT seqmin::text, seqmax::text, seqcache::text, seqcycle FROM pg_sequence WHERE seqrelid = 'pgserver_owned_test.\"custom ids\"'::regclass", [])).rows).toEqual([{ seqmin: '2', seqmax: '900', seqcache: '3', seqcycle: true }]);
+      await runPgExec(url, 'DROP TABLE pgserver_owned_test.t');
+      expect((await runPgQuery(url, "SELECT to_regclass('pgserver_owned_test.\"custom ids\"') AS seq", [])).rows).toEqual([{ seq: null }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_owned_test CASCADE'); }
+  });
+
+
   test("unique indexes provide row identity without partial, expression or INCLUDE columns", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_unique_index_test');
     try {
@@ -114,10 +133,10 @@ pgDescribe("pgServer (live)", () => {
       const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_defaults_test' && t.name === 'original')!;
       await runPgExec(url, 'INSERT INTO pgserver_defaults_test.original DEFAULT VALUES');
       await runPgExec(url, 'DROP TABLE pgserver_defaults_test.original');
-      await runPgExec(url, table.ddl!.replace('"original"', '"copy"'));
-      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.copy DEFAULT VALUES');
-      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.copy DEFAULT VALUES');
-      expect((await runPgQuery(url, 'SELECT * FROM pgserver_defaults_test.copy ORDER BY id', [])).rows).toEqual([
+      await runPgExec(url, table.ddl!);
+      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.original DEFAULT VALUES');
+      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.original DEFAULT VALUES');
+      expect((await runPgQuery(url, 'SELECT * FROM pgserver_defaults_test.original ORDER BY id', [])).rows).toEqual([
         { id: 10, serial_id: 1, amount: 7, doubled: 14 },
         { id: 12, serial_id: 2, amount: 7, doubled: 14 },
       ]);

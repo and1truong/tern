@@ -64,3 +64,8 @@ test('ordinary backslashes cannot conceal a transaction command', () => {
   expect(() => assertReadOnlySql("SELECT '\\'; COMMIT; SELECT '';" )).toThrow(DbError);
   expect(assertReadOnlySql("SELECT E'escaped \\\' COMMIT; text' AS value")).toContain('SELECT');
 });
+
+test('PostgreSQL TABLE shorthand uses bounded read queries', () => {
+  expect(boundReadSql('TABLE public.users', 5, 2, 'postgres')).toBe('SELECT * FROM (TABLE public.users\n) AS "__tern_query" LIMIT 6 OFFSET 2');
+  expect(() => assertReadOnlySql('TABLE public.users', 'sqlite')).toThrow();
+});

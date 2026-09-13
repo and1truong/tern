@@ -171,7 +171,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
               t.table_type, rel.relpersistence, rel.relrowsecurity, rel.relforcerowsecurity,
               EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = rel.oid) AS has_policies,
-              seq.seqmin, seq.seqmax, seq.seqcache, seq.seqcycle, pg_get_partkeydef(rel.oid) AS partition_key,
+              seqrel.relpersistence AS sequence_persistence, seq.seqmin, seq.seqmax, seq.seqcache, seq.seqcycle, seq.seqstart, seq.seqincrement, format_type(seq.seqtypid, NULL) AS sequence_type, pg_get_partkeydef(rel.oid) AS partition_key,
               CASE WHEN rel.relispartition THEN pg_get_expr(rel.relpartbound, rel.oid) END AS partition_bound,
               (SELECT string_agg(format('%I.%I', pn.nspname, parent.relname), ', ' ORDER BY inh.inhseqno) FROM pg_inherits inh
                 JOIN pg_class parent ON parent.oid = inh.inhparent
@@ -183,6 +183,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
          LEFT JOIN information_schema.columns c ON c.table_schema = t.table_schema AND c.table_name = t.table_name
          LEFT JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name
          LEFT JOIN pg_sequence seq ON seq.seqrelid = pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name)::regclass
+         LEFT JOIN pg_class seqrel ON seqrel.oid = seq.seqrelid
          LEFT JOIN pg_type typ ON typ.oid = a.atttypid
          LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
          LEFT JOIN pg_namespace cn ON cn.oid = coll.collnamespace
@@ -458,16 +459,20 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       // RLS policies are not synthesized; do not offer DDL that drops their protection.
       if (metadata.relrowsecurity || metadata.relforcerowsecurity || metadata.has_policies) continue;
       const inherits = metadata.parent_relation && !metadata.partition_bound ? ` INHERITS (${metadata.parent_relation})` : "";
+      const sequenceDdl: string[] = [];
+      const ownershipDdl: string[] = [];
       const definitions = t.columns.flatMap(c => {
         const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
         if (inherits && metadata.attislocal === false) return [];
-        const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')
-          ? ({ smallint: 'smallserial', integer: 'serial', bigint: 'bigserial' } as Record<string, string>)[c.type] : undefined;
-        const generation = serialType ? '' : c.identity
+        if (!c.identity && metadata.owned_sequence) {
+          sequenceDdl.push(`CREATE ${metadata.sequence_persistence === "u" ? "UNLOGGED " : metadata.sequence_persistence === "t" ? "TEMPORARY " : ""}SEQUENCE ${metadata.owned_sequence} AS ${metadata.sequence_type} START WITH ${metadata.seqstart} INCREMENT BY ${metadata.seqincrement} MINVALUE ${metadata.seqmin} MAXVALUE ${metadata.seqmax} CACHE ${metadata.seqcache} ${metadata.seqcycle ? "CYCLE" : "NO CYCLE"};`);
+          ownershipDdl.push(`ALTER SEQUENCE ${metadata.owned_sequence} OWNED BY "${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"."${c.name.replace(/"/g, '""')}";`);
+        }
+        const generation = c.identity
           ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment} MINVALUE ${metadata.seqmin} MAXVALUE ${metadata.seqmax} CACHE ${metadata.seqcache} ${metadata.seqcycle ? "CYCLE" : "NO CYCLE"})`
           : c.generated ? ` GENERATED ALWAYS AS (${metadata.generation_expression}) STORED`
           : c.defaultValue != null ? ` DEFAULT ${c.defaultValue}` : '';
-        return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${metadata.collation ? ` COLLATE ${metadata.collation}` : ""}${generation}${c.notNull ? " NOT NULL" : ""}`;
+        return `  "${c.name.replace(/"/g, '""')}" ${c.type}${metadata.collation ? ` COLLATE ${metadata.collation}` : ""}${generation}${c.notNull ? " NOT NULL" : ""}`;
       });
       for (const constraint of constraints.filter(c => c.schema === t.schema && c.table === t.name)) {
         if (inherits && constraintRows.some(row => row.schema === t.schema && row.table_name === t.name && row.name === constraint.name && row.conislocal === false)) continue;
@@ -476,6 +481,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       const body = definitions.join(",\n");
       const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
       t.ddl = `CREATE ${metadata.relpersistence === "u" ? "UNLOGGED " : ""}TABLE ${relation} (\n${body}\n)${inherits}${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
+      t.ddl = [...sequenceDdl, t.ddl, ...ownershipDdl].join("\n");
       if (metadata.partition_bound) t.ddl += `\nALTER TABLE ${metadata.parent_relation} ATTACH PARTITION ${relation} ${metadata.partition_bound};`;
     }
 

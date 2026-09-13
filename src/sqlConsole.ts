@@ -170,7 +170,7 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
     for (let i = 1; i < words.length; i++) {
       if (words[i] === "(") depth++;
       if (words[i] === ")") depth--;
-      if (depth === 0 && ["SELECT", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE", "EXECUTE"].includes(words[i])) return isWriteWords(words.slice(i), dialect);
+      if (depth === 0 && ["SELECT", "TABLE", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE", "EXECUTE"].includes(words[i])) return isWriteWords(words.slice(i), dialect);
     }
   }
   if (words[0] === "PRAGMA") {
@@ -179,8 +179,8 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
     if (argument === -1) return !READ_PRAGMAS.has(words.at(-1)!);
     return !["TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_XINFO", "INDEX_LIST", "FOREIGN_KEY_LIST", "INTEGRITY_CHECK", "QUICK_CHECK", "FOREIGN_KEY_CHECK"].includes(words[argument - 1]);
   }
-  if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0])) return true;
-  if (dialect === "postgres" && ["SELECT", "WITH"].includes(words[0])) {
+  if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0]) && !(dialect === "postgres" && words[0] === "TABLE")) return true;
+  if (dialect === "postgres" && ["SELECT", "WITH", "TABLE"].includes(words[0])) {
     let depth = 0;
     for (let i = 0; i < words.length; i++) {
       const word = words[i];
