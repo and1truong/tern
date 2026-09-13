@@ -464,3 +464,14 @@ test('a table named trigger cannot conceal migration COMMIT', () => {
   expect(() => runMigration(path, 'CREATE TABLE trigger (begin integer); INSERT INTO trigger VALUES(1); COMMIT;', false)).toThrow('Transaction control');
   expect(runQuery(path, "SELECT name FROM sqlite_master WHERE name='trigger'", []).rows).toEqual([]);
 });
+
+test('ambiguous BEGIN identifiers cannot hide a trigger-script COMMIT', () => {
+  const path = join(dir, 'trigger-begin-migration.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t(id integer); CREATE TABLE "begin"(id integer)');
+  for (const header of ['CREATE TRIGGER begin AFTER INSERT ON t', 'CREATE TRIGGER tr AFTER INSERT ON begin', 'CREATE TRIGGER tr AFTER INSERT ON t WHEN new.begin > 0']) {
+    expect(() => runMigration(path, `${header} BEGIN SELECT 1; END; COMMIT;`, false)).toThrow('Ambiguous trigger BEGIN');
+  }
+  runMigration(path, 'CREATE TRIGGER "begin" AFTER INSERT ON "begin" BEGIN SELECT CASE WHEN 1 THEN 1 ELSE 2 END; END;', false);
+  expect(runQuery(path, "SELECT name FROM sqlite_master WHERE type='trigger'", []).rows).toEqual([]);
+});

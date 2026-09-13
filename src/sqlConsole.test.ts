@@ -152,3 +152,20 @@ test('tables named trigger are not parsed as trigger bodies', () => {
   expect(splitSqlStatements('CREATE TABLE trigger (begin integer); INSERT INTO trigger VALUES(1); COMMIT;', 'sqlite').map(s => s.sql))
     .toEqual(['CREATE TABLE trigger (begin integer)', 'INSERT INTO trigger VALUES(1)', 'COMMIT']);
 });
+
+test("routes bare maintenance PRAGMAs and sequence calls to writable execution", () => {
+  for (const name of ['incremental_vacuum', 'optimize', 'wal_checkpoint', 'shrink_memory']) {
+    expect(isWriteSql(`PRAGMA ${name}`)).toBe(true);
+    expect(isWriteSql(`PRAGMA main.${name}`)).toBe(true);
+  }
+  for (const sql of ["SELECT nextval('seq')", "SELECT pg_catalog.setval('seq', 10)", `SELECT pg_catalog."nextval"('seq')`, "WITH n AS (SELECT nextval('seq')) SELECT * FROM n"]) expect(isWriteSql(sql, 'postgres')).toBe(true);
+  expect(isWriteSql("SELECT 'nextval(seq)'", 'postgres')).toBe(false);
+  expect(isWriteSql("SELECT currval('seq')", 'postgres')).toBe(false);
+});
+
+test('ambiguous BEGIN identifiers in trigger headers cannot swallow following statements', () => {
+  for (const header of ['CREATE TRIGGER begin AFTER INSERT ON t', 'CREATE TRIGGER tr AFTER INSERT ON begin', 'CREATE TRIGGER tr AFTER INSERT ON t WHEN new.begin > 0']) {
+    expect(() => splitSqlStatements(`${header} BEGIN SELECT 1; END; COMMIT;`, 'sqlite')).toThrow('Ambiguous trigger BEGIN');
+  }
+  expect(splitSqlStatements('CREATE TRIGGER "begin" AFTER INSERT ON "begin" BEGIN SELECT CASE WHEN 1 THEN 1 END; END; SELECT 1;', 'sqlite')).toHaveLength(2);
+});

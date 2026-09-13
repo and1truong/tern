@@ -1,3 +1,4 @@
+import { READ_PRAGMAS } from "../server/sqlSafety.ts";
 type Dialect = "sqlite" | "postgres";
 export interface SqlSelection { from: number; to: number }
 
@@ -71,6 +72,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
   let dollarTag: string | null = null;
   let trigger = false;
   let bodyDepth = 0;
+  let triggerBegins = 0;
   const leadingWords: string[] = [];
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
@@ -115,6 +117,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       i--;
       leadingWords.push(word);
       if (word === "TRIGGER" && leadingWords.length <= 4 && (/^CREATE (?:(?:TEMP|TEMPORARY) )?TRIGGER$/.test(leadingWords.join(" ")) || (dialect === "postgres" && leadingWords.join(" ") === "CREATE OR REPLACE TRIGGER"))) trigger = true;
+      if (trigger && dialect === "sqlite" && word === "BEGIN" && ++triggerBegins > 1) throw new Error("Ambiguous trigger BEGIN: quote identifiers named begin before executing this script");
       if (trigger && (word === "BEGIN" || word === "CASE")) bodyDepth++;
       if (trigger && word === "END") bodyDepth--;
       continue;
@@ -124,6 +127,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       if (structuralWords(statement, dialect).length) statements.push({ sql: statement, from: start, to: i });
       start = i + 1;
       trigger = false;
+      triggerBegins = 0;
       leadingWords.length = 0;
     }
   }
@@ -151,7 +155,12 @@ export function firstSqlVerb(sql: string, dialect: Dialect = "sqlite"): string {
 }
 
 export function isWriteSql(sql: string, dialect: Dialect = "sqlite"): boolean {
-  return isWriteWords(structuralWords(sql, dialect), dialect);
+  const words = structuralWords(sql, dialect);
+  if (dialect === "postgres") {
+    const named = structuralWords(sql, dialect, true);
+    if (named.some((word, i) => ["NEXTVAL", "SETVAL"].includes(word) && named[i + 1] === "(")) return true;
+  }
+  return isWriteWords(words, dialect);
 }
 
 function isWriteWords(words: string[], dialect: Dialect): boolean {
@@ -167,7 +176,8 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
   if (words[0] === "PRAGMA") {
     if (words.includes("=")) return true;
     const argument = words.indexOf("(");
-    return argument !== -1 && !["TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_XINFO", "INDEX_LIST", "FOREIGN_KEY_LIST", "INTEGRITY_CHECK", "QUICK_CHECK", "FOREIGN_KEY_CHECK"].includes(words[argument - 1]);
+    if (argument === -1) return !READ_PRAGMAS.has(words.at(-1)!);
+    return !["TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_XINFO", "INDEX_LIST", "FOREIGN_KEY_LIST", "INTEGRITY_CHECK", "QUICK_CHECK", "FOREIGN_KEY_CHECK"].includes(words[argument - 1]);
   }
   if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0])) return true;
   if (dialect === "postgres" && ["SELECT", "WITH"].includes(words[0])) {

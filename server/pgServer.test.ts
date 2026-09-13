@@ -430,6 +430,17 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SCHEMA tern_session_test CASCADE'); }
   });
 
+  test("sequence-changing SELECTs execute after writable classification", async () => {
+    await runPgExec(url, 'CREATE SEQUENCE public.tern_route_sequence');
+    try {
+      for (const sql of ["SELECT nextval('public.tern_route_sequence')", "SELECT setval('public.tern_route_sequence', 10)"]) {
+        expect(isWriteSql(sql, 'postgres')).toBe(true);
+        await runPgExec(url, sql);
+      }
+      expect((await runPgQuery(url, 'SELECT last_value::integer AS n FROM public.tern_route_sequence', [])).rows).toEqual([{ n: 10 }]);
+    } finally { await runPgExec(url, 'DROP SEQUENCE public.tern_route_sequence'); }
+  });
+
   test("partition DDL restores bounds and routing", async () => {
     await runPgExec(url, 'CREATE SCHEMA tern_partition_test; CREATE TABLE tern_partition_test.parent(id integer) PARTITION BY RANGE(id); CREATE TABLE tern_partition_test.child PARTITION OF tern_partition_test.parent FOR VALUES FROM(0) TO(10)');
     try {
