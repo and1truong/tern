@@ -91,7 +91,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     if (busy || !ready) return;
     const view = editor.current;
     const selection = view?.state.selection.main ?? { from: 0, to: 0 };
-    const statements = sqlToRun(active.sql, selection, all);
+    const statements = sqlToRun(active.sql, selection, all, source.kind);
     if (!statements.length) return;
     setBusy(true); setError(null); setOutputs([]); setActiveOutput(0);
     const abort = new AbortController();
@@ -102,7 +102,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     for (const statement of statements) {
       if (abort.signal.aborted) break;
       const started = performance.now();
-      const isWrite = isWriteSql(statement);
+      const isWrite = isWriteSql(statement, source.kind);
       if (isWrite && !writable) {
         nextOutputs.push({ sql: statement, error: "Read-only mode: enable Writable before running this statement." });
         break;
@@ -141,9 +141,9 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
 
   const explain = async () => {
     const selection = editor.current?.state.selection.main ?? { from: 0, to: 0 };
-    const statement = sqlToRun(active.sql, selection, false)[0];
+    const statement = sqlToRun(active.sql, selection, false, source.kind)[0];
     if (!statement) return;
-    if (isWriteSql(statement)) {
+    if (isWriteSql(statement, source.kind)) {
       setOutputs([{ sql: statement, kind: "explain", error: "EXPLAIN is available only for read queries." }]);
       return;
     }

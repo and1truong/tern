@@ -23,3 +23,9 @@ describe("SQL identifiers", () => {
     expect(tableLabel(table("events", "audit"))).toBe("audit.events");
   });
 });
+
+test('table identities distinguish dots inside quoted identifiers', () => {
+  const a = { schema: 'a.b', name: 'c' } as any;
+  const b = { schema: 'a', name: 'b.c' } as any;
+  expect(tableKey(a)).not.toBe(tableKey(b));
+});

@@ -28,3 +28,11 @@ test('qualified public targets do not match a same-named table in another schema
   expect(mermaid).toContain('public_users ||--o{ audit_events');
   expect(mermaid).not.toContain('audit_users ||--o{ audit_events');
 });
+
+test('quoted dotted foreign-key targets resolve to their actual table', () => {
+  const dotted: DbSchema = { ...schema, tables: [
+    { ...schema.tables[0], schema: 'a.b', name: 'c' },
+    { ...schema.tables[1], columns: [{ ...schema.tables[1].columns[0], fk: '"a.b"."c"(id)' }] },
+  ] };
+  expect(schemaToMermaid(dotted)).toContain('a_b_c ||--o{ audit_events');
+});

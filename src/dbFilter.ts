@@ -89,7 +89,7 @@ function numOrThrow(v: string): string {
 function compileRuleExec(r: FilterRule, cols: DbColumn[], params: unknown[], dialect: DbDialect): string {
   const col = cols[r.col];
   const textOperation = ["contains", "not_contains", "regex", "glob"].includes(r.op);
-  const name = dialect === "postgres" && textOperation && !isTextType(col.type) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
+  const name = dialect === "postgres" && ((textOperation && !isTextType(col.type)) || (col.comparable === false && ["equals", "not_equals"].includes(r.op))) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
   const numeric = isNumericType(col.type);
   switch (r.op) {
     case "contains": params.push(`%${r.value}%`); return `${name} LIKE ?`;
@@ -134,7 +134,7 @@ function sqlLit(value: string, numeric: boolean): string {
 function compileRulePreview(r: FilterRule, cols: DbColumn[], dialect: DbDialect): string {
   const col = cols[r.col];
   const textOperation = ["contains", "not_contains", "regex", "glob"].includes(r.op);
-  const name = dialect === "postgres" && textOperation && !isTextType(col.type) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
+  const name = dialect === "postgres" && ((textOperation && !isTextType(col.type)) || (col.comparable === false && ["equals", "not_equals"].includes(r.op))) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
   const numeric = isNumericType(col.type);
   switch (r.op) {
     case "contains": return `${name} LIKE '%${r.value.replace(/'/g, "''")}%'`;

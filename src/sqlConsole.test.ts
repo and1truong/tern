@@ -67,3 +67,11 @@ test('PRAGMA mutations use exec while catalog argument forms remain reads', () =
   for (const sql of ['PRAGMA user_version = 7', 'PRAGMA journal_mode = WAL', 'PRAGMA main.user_version(7)', 'PRAGMA foreign_keys(ON)']) expect(isWriteSql(sql)).toBe(true);
   for (const sql of ['PRAGMA user_version', "PRAGMA table_info('users')", 'PRAGMA main.index_list(users)', "PRAGMA table_info('a=b')"]) expect(isWriteSql(sql)).toBe(false);
 });
+
+test('PostgreSQL nested comments preserve statement boundaries and operation classification', () => {
+  const query = '/* outer /* inner */ still ; commented */ SELECT 1';
+  expect(splitSqlStatements(`${query}; SELECT 2;`, 'postgres').map(s => s.sql)).toEqual([query, 'SELECT 2']);
+  expect(sqlToRun(`${query};`, { from: query.length, to: query.length }, false, 'postgres')).toEqual([query]);
+  expect(isWriteSql(query, 'postgres')).toBe(false);
+  expect(splitSqlStatements('SELECT 1; /* outer /* inner */ SELECT 2;', 'sqlite')).toHaveLength(2);
+});

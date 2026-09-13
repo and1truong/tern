@@ -129,3 +129,10 @@ test('PostgreSQL array and nonnumeric types retain typed equality parameters', (
     expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value }] }, columns, 'postgres').params).toEqual([value]);
   }
 });
+
+test('noncomparable PostgreSQL equality uses text conversion', () => {
+  for (const type of ['json', 'xml', 'point']) {
+    const columns: DbColumn[] = [{ name: 'value', type, notNull: false, pk: false, fk: null, comparable: false }];
+    expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value: 'x' }] }, columns, 'postgres').where).toBe('(CAST("value" AS text) = ?)');
+  }
+});

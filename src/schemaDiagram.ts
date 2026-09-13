@@ -1,3 +1,4 @@
+import { tableKey } from "./sqlIdentifiers.ts";
 import type { DbSchema, DbTable } from "../shared.ts";
 
 export interface SchemaRelation {
@@ -36,7 +37,7 @@ export function schemaToMermaid(schema: DbSchema): string {
     lines.push("  }");
   }
   for (const relation of schemaRelations(schema)) {
-    const target = schema.tables.find((table) => table.name === relation.toTable || `${table.schema}.${table.name}` === relation.toTable);
+    const target = schema.tables.find((table) => table.name === relation.toTable || tableKey(table) === relation.toTable);
     lines.push(`  ${entityName(target ?? relation.toTable)} ||--o{ ${entityName(relation.fromTable)} : "${relation.fromColumn}"`);
   }
   return lines.join("\n") + "\n";

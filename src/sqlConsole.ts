@@ -1,15 +1,20 @@
+type Dialect = "sqlite" | "postgres";
 export interface SqlSelection { from: number; to: number }
 
-function structuralWords(sql: string): string[] {
+function structuralWords(sql: string, dialect: Dialect = "sqlite"): string[] {
   const words: string[] = [];
   let quote: "'" | '"' | "`" | null = null;
   let lineComment = false;
-  let blockComment = false;
+  let blockComment = 0;
   let dollarTag: string | null = null;
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
     if (lineComment) { if (ch === "\n") lineComment = false; continue; }
-    if (blockComment) { if (ch === "*" && sql[i + 1] === "/") { blockComment = false; i++; } continue; }
+    if (blockComment) {
+      if (dialect === "postgres" && ch === "/" && sql[i + 1] === "*") { blockComment++; i++; }
+      else if (ch === "*" && sql[i + 1] === "/") { blockComment--; i++; }
+      continue;
+    }
     if (dollarTag) {
       if (sql.startsWith(dollarTag, i)) { i += dollarTag.length - 1; dollarTag = null; }
       continue;
@@ -19,7 +24,7 @@ function structuralWords(sql: string): string[] {
       continue;
     }
     if (ch === "-" && sql[i + 1] === "-") { lineComment = true; i++; continue; }
-    if (ch === "/" && sql[i + 1] === "*") { blockComment = true; i++; continue; }
+    if (ch === "/" && sql[i + 1] === "*") { blockComment = 1; i++; continue; }
     if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
     if (ch === "$") {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
@@ -36,12 +41,12 @@ function structuralWords(sql: string): string[] {
   return words;
 }
 
-export function splitSqlStatements(sql: string): { sql: string; from: number; to: number }[] {
+export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { sql: string; from: number; to: number }[] {
   const statements: { sql: string; from: number; to: number }[] = [];
   let start = 0;
   let quote: "'" | '"' | "`" | null = null;
   let lineComment = false;
-  let blockComment = false;
+  let blockComment = 0;
   let dollarTag: string | null = null;
   let trigger = false;
   let bodyDepth = 0;
@@ -49,7 +54,11 @@ export function splitSqlStatements(sql: string): { sql: string; from: number; to
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
     if (lineComment) { if (ch === "\n") lineComment = false; continue; }
-    if (blockComment) { if (ch === "*" && sql[i + 1] === "/") { blockComment = false; i++; } continue; }
+    if (blockComment) {
+      if (dialect === "postgres" && ch === "/" && sql[i + 1] === "*") { blockComment++; i++; }
+      else if (ch === "*" && sql[i + 1] === "/") { blockComment--; i++; }
+      continue;
+    }
     if (dollarTag) {
       if (sql.startsWith(dollarTag, i)) { i += dollarTag.length - 1; dollarTag = null; }
       continue;
@@ -62,7 +71,7 @@ export function splitSqlStatements(sql: string): { sql: string; from: number; to
       continue;
     }
     if (ch === "-" && sql[i + 1] === "-") { lineComment = true; i++; continue; }
-    if (ch === "/" && sql[i + 1] === "*") { blockComment = true; i++; continue; }
+    if (ch === "/" && sql[i + 1] === "*") { blockComment = 1; i++; continue; }
     if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
     if (ch === "$") {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
@@ -92,12 +101,12 @@ export function splitSqlStatements(sql: string): { sql: string; from: number; to
   return statements;
 }
 
-export function sqlToRun(sql: string, selection: SqlSelection, all: boolean): string[] {
-  if (all) return splitSqlStatements(sql).map((statement) => statement.sql);
+export function sqlToRun(sql: string, selection: SqlSelection, all: boolean, dialect: Dialect = "sqlite"): string[] {
+  if (all) return splitSqlStatements(sql, dialect).map((statement) => statement.sql);
   if (selection.from !== selection.to) {
-    return splitSqlStatements(sql.slice(selection.from, selection.to)).map((statement) => statement.sql);
+    return splitSqlStatements(sql.slice(selection.from, selection.to), dialect).map((statement) => statement.sql);
   }
-  const statements = splitSqlStatements(sql);
+  const statements = splitSqlStatements(sql, dialect);
   const current = statements.find((statement) =>
     selection.from >= statement.from && selection.from <= statement.to,
   );
@@ -106,12 +115,12 @@ export function sqlToRun(sql: string, selection: SqlSelection, all: boolean): st
   return current ? [current.sql] : trailing ? [last.sql] : [];
 }
 
-export function firstSqlVerb(sql: string): string {
-  return structuralWords(sql)[0] ?? "";
+export function firstSqlVerb(sql: string, dialect: Dialect = "sqlite"): string {
+  return structuralWords(sql, dialect)[0] ?? "";
 }
 
-export function isWriteSql(sql: string): boolean {
-  const words = structuralWords(sql);
+export function isWriteSql(sql: string, dialect: Dialect = "sqlite"): boolean {
+  const words = structuralWords(sql, dialect);
   if (!words.length) return false;
   if (words[0] === "PRAGMA") {
     if (words.includes("=")) return true;

@@ -69,8 +69,8 @@ test("pairs composite foreign-key columns by catalog ordinal", () => {
     { table_schema: "audit", table_name: "events", constraint_name: "events_tenant_actor_fkey", constraint_type: "FOREIGN KEY", column_name: "tenant_id", ref_schema: "core", ref_table: "users", ref_column: "tenant_id" },
     { table_schema: "audit", table_name: "events", constraint_name: "events_tenant_actor_fkey", constraint_type: "FOREIGN KEY", column_name: "actor_id", ref_schema: "core", ref_table: "users", ref_column: "id" },
   ]);
-  expect(metadata.foreign.get("audit.events.tenant_id")).toBe("core.users(tenant_id)");
-  expect(metadata.foreign.get("audit.events.actor_id")).toBe("core.users(id)");
+  expect(metadata.foreign.get("audit\0events\0tenant_id")).toBe("core.users(tenant_id)");
+  expect(metadata.foreign.get("audit\0events\0actor_id")).toBe("core.users(id)");
 });
 
 // Integration tests require a live Postgres. Set TEST_PG_URL to enable, e.g.
@@ -101,6 +101,26 @@ pgDescribe("pgServer (live)", () => {
         { id: 12, serial_id: 2, amount: 7, doubled: 14 },
       ]);
     } finally { await runPgExec(url, 'DROP SCHEMA pgserver_defaults_test CASCADE'); }
+  });
+
+  test("dotted relation names stay separate and noncomparable filters execute", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_dot_test');
+    await runPgExec(url, 'CREATE TABLE public."pgserver_dot_test.logs" (id integer PRIMARY KEY)');
+    try {
+      await runPgExec(url, 'CREATE TABLE pgserver_dot_test.logs (message text, document json, point_value point)');
+      const schema = await readPgSchema(url);
+      expect(schema.tables.find(t => t.schema === 'public' && t.name === 'pgserver_dot_test.logs')!.columns.map(c => c.name)).toEqual(['id']);
+      const table = schema.tables.find(t => t.schema === 'pgserver_dot_test' && t.name === 'logs')!;
+      expect(table.columns.map(c => c.name)).toEqual(['message', 'document', 'point_value']);
+      await runPgExec(url, `INSERT INTO pgserver_dot_test.logs VALUES ('ok', '{"a":1}', '(1,2)')`);
+      for (const [name, value] of [['document', '{"a":1}'], ['point_value', '(1,2)']]) {
+        const filter = compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: table.columns.findIndex(c => c.name === name), op: 'equals', value }] }, table.columns, 'postgres');
+        expect((await runPgQuery(url, `SELECT message FROM pgserver_dot_test.logs WHERE ${filter.where}`, filter.params)).rows).toEqual([{ message: 'ok' }]);
+      }
+    } finally {
+      await runPgExec(url, 'DROP TABLE public."pgserver_dot_test.logs"');
+      await runPgExec(url, 'DROP SCHEMA pgserver_dot_test CASCADE');
+    }
   });
 
   test("quoted mutation identifiers and migration rollback guard", async () => {
@@ -262,5 +282,10 @@ pgDescribe("pgServer (live)", () => {
 
 test('public foreign-key targets remain schema-qualified', () => {
   const metadata = collectPgKeyMetadata([{ table_schema: 'audit', table_name: 'events', column_name: 'actor_id', constraint_type: 'FOREIGN KEY', ref_schema: 'public', ref_table: 'users', ref_column: 'id' }]);
-  expect(metadata.foreign.get('audit.events.actor_id')).toBe('public.users(id)');
+  expect(metadata.foreign.get('audit\0events\0actor_id')).toBe('public.users(id)');
+});
+
+test('dotted foreign-key targets use the same quoted identity as documents', () => {
+  const metadata = collectPgKeyMetadata([{ table_schema: 'audit', table_name: 'events', column_name: 'actor_id', constraint_type: 'FOREIGN KEY', ref_schema: 'a.b', ref_table: 'c', ref_column: 'id' }]);
+  expect(metadata.foreign.get('audit\0events\0actor_id')).toBe('"a.b"."c"(id)');
 });

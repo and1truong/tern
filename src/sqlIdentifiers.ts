@@ -5,6 +5,7 @@ export function quoteIdent(name: string): string {
 }
 
 export function tableKey(table: DbTable): string {
+  if (table.schema && (table.schema.includes(".") || table.name.includes("."))) return tableSql(table);
   return table.schema ? `${table.schema}.${table.name}` : table.name;
 }
 

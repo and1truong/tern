@@ -67,8 +67,8 @@ export function App() {
       if (isDocuments(saved)) {
         setTabs(saved.tabs); setActive(saved.active);
         const unique = new Map(saved.tabs.map(d => [sourceId(d.source), d.source]));
-        await Promise.all([...unique.values()].map(connect));
         setSelected(saved.tabs.find(d => d.id === saved.active)?.source ?? null);
+        await Promise.all([...unique.values()].map(connect));
       }
       setReady(true);
     }).catch(e => setError(String(e)));

@@ -69,14 +69,17 @@ export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
     const schema = String(row.table_schema);
     const table = String(row.table_name);
     const column = String(row.column_name);
-    const key = `${schema}.${table}.${column}`;
+    const key = `${schema}\0${table}\0${column}`;
     if (row.constraint_type === "PRIMARY KEY") primary.add(key);
     else if (row.constraint_type === "FOREIGN KEY" && row.ref_table) {
       const refSchema = String(row.ref_schema ?? "");
-      const refTable = `${refSchema ? `${refSchema}.` : ""}${String(row.ref_table)}`;
+      const target = String(row.ref_table);
+      const refTable = refSchema.includes('.') || target.includes('.')
+        ? [refSchema, target].filter(Boolean).map(part => `"${part.replace(/"/g, '""')}"`).join('.')
+        : `${refSchema ? `${refSchema}.` : ""}${target}`;
       foreign.set(key, `${refTable}(${String(row.ref_column)})`);
     } else if (row.constraint_type === "UNIQUE") {
-      const group = `${schema}.${table}.${String(row.constraint_name)}`;
+      const group = `${schema}\0${table}\0${String(row.constraint_name)}`;
       uniqueGroups.set(group, [...(uniqueGroups.get(group) ?? []), column]);
     }
   }
@@ -199,7 +202,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         WHERE schemaname NOT IN ('pg_catalog','information_schema')`,
     ) as Record<string, unknown>[];
     const materializedDdl = new Map(materializedDefinitions.map((row) => [
-      `${row.table_schema}.${row.table_name}`,
+      `${row.table_schema}\0${row.table_name}`,
       `CREATE MATERIALIZED VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "")}`,
     ]));
     const viewDefinitions = await db.unsafe(
@@ -208,7 +211,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         WHERE schemaname NOT IN ('pg_catalog','information_schema')`,
     ) as Record<string, unknown>[];
     const viewDdl = new Map(viewDefinitions.map((row) => [
-      `${row.table_schema}.${row.table_name}`,
+      `${row.table_schema}\0${row.table_name}`,
       `CREATE VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "")}`,
     ]));
 
@@ -263,7 +266,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
        )
        SELECT n.nspname AS table_schema, rel.relname AS table_name, a.attname AS column_name,
               directly_comparable.oid IS NOT NULL OR (
-                effective.typelem <> 0 AND element_comparable.oid IS NOT NULL AND EXISTS (
+                effective.typcategory = 'A' AND effective.typelem <> 0 AND element_comparable.oid IS NOT NULL AND EXISTS (
                   SELECT 1
                     FROM pg_operator o
                     JOIN pg_type l ON l.oid = o.oprleft
@@ -286,7 +289,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
           AND n.nspname NOT IN ('pg_catalog','information_schema')`,
     ) as Record<string, unknown>[];
     const comparable = new Map(comparableRows.map((row) => [
-      `${row.table_schema}.${row.table_name}.${row.column_name}`,
+      `${row.table_schema}\0${row.table_name}\0${row.column_name}`,
       row.is_comparable === true,
     ]));
 
@@ -323,17 +326,16 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     const rowCount = new Map<string, number>();
     for (const r of counts) {
       const est = Number(r.est);
-      rowCount.set(`${r.table_schema}.${r.table_name}`, Number.isFinite(est) && est >= 0 ? est : -1);
+      rowCount.set(`${r.table_schema}\0${r.table_name}`, Number.isFinite(est) && est >= 0 ? est : -1);
     }
 
     // Group columns into tables, preserving information_schema order.
     const byTable = new Map<string, DbTable>();
     for (const c of cols) {
-      // Qualify with schema only when not the default `public`, so the tree
-      // reads cleanly for the common case while staying unambiguous otherwise.
+      // PostgreSQL identifiers cannot contain NUL; keep identity separate from display.
       const schema = String(c.table_schema);
       const bare = String(c.table_name);
-      const name = schema === "public" ? bare : `${schema}.${bare}`;
+      const name = `${schema}\0${bare}`;
       let tbl = byTable.get(name);
       if (!tbl) {
         const isView = c.table_type === "VIEW";
@@ -343,12 +345,12 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
           schema,
           type: isMaterialized ? "materialized_view" : isView ? "view" : "table",
           columns: [],
-          rowCount: isView || isMaterialized ? -1 : (rowCount.get(`${schema}.${bare}`) ?? -1),
+          rowCount: isView || isMaterialized ? -1 : (rowCount.get(`${schema}\0${bare}`) ?? -1),
           ddl: "",
         };
         byTable.set(name, tbl);
       }
-      const keyId = `${schema}.${bare}.${c.column_name}`;
+      const keyId = `${schema}\0${bare}\0${c.column_name}`;
       const col: DbColumn = {
         name: String(c.column_name),
         type: String(c.data_type ?? ""),
@@ -364,7 +366,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     }
     const tables = [...byTable.values()];
     for (const table of tables) {
-      const prefix = `${table.schema}.${table.name}.`;
+      const prefix = `${table.schema}\0${table.name}\0`;
       table.uniqueKeys = [...uniqueGroups.entries()].filter(([key]) => key.startsWith(prefix)).map(([, columns]) => columns);
     }
     // Synthesize a minimal CREATE statement per table for the Structure pane's
@@ -413,11 +415,11 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     // DDL block (Postgres has no sqlite_master.sql equivalent).
     for (const t of tables) {
       if (t.type === "materialized_view") {
-        t.ddl = materializedDdl.get(`${t.schema}.${t.name}`) ?? "";
+        t.ddl = materializedDdl.get(`${t.schema}\0${t.name}`) ?? "";
         continue;
       }
       if (t.type === "view") {
-        t.ddl = viewDdl.get(`${t.schema}.${t.name}`) ?? "";
+        t.ddl = viewDdl.get(`${t.schema}\0${t.name}`) ?? "";
         continue;
       }
       const definitions = t.columns.map(c => {
