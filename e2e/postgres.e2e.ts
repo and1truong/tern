@@ -31,6 +31,16 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
   });
   await test.step('Staging does not write; reviewed transaction commits', async () => {
     await page.getByRole('button', { name: 'Read Only', exact: true }).click();
+    const confirmation = page.getByRole('dialog', { name: 'Enable writes?' });
+    await expect(confirmation).toBeVisible();
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 480, height: 800 }]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(async () => {
+        const box = await confirmation.boundingBox();
+        return box ? Math.max(Math.abs(box.x + box.width / 2 - viewport.width / 2), Math.abs(box.y + box.height / 2 - viewport.height / 2)) : Infinity;
+      }).toBeLessThan(2);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('dialog', { name: 'Enable writes?' }).getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Read Only', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Read Only', exact: true }).click();
