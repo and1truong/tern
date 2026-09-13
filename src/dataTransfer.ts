@@ -100,7 +100,7 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
   if (quoted) throw new Error("CSV contains an unterminated quoted field");
   record.push(value);
   if (recordStarted) records.push(record);
-  const columns = (records.shift() ?? []).map((column) => column.trim());
+  const columns = records.shift() ?? [];
   if (!columns.length || columns.some((column) => !column)) throw new Error("CSV must have a non-empty header row");
   if (new Set(columns).size !== columns.length) throw new Error("CSV header names must be unique");
   const rows = records.map((cells, rowIndex) => {

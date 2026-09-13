@@ -87,8 +87,12 @@ export function App() {
     const doc: Document = { id: crypto.randomUUID(), kind, title, source, table };
     setTabs(prev => [...prev, doc]); setActive(doc.id);
   };
-  const close = (doc: Document) => {
+  const close = async (doc: Document) => {
     if (dirty[doc.id]) { setError('Apply or revert pending changes, or wait for SQL to save before closing this document.'); return; }
+    if (doc.kind === 'sql') {
+      try { await dbApi.state.remove(`sql:${doc.id}`); }
+      catch (e) { setError(String(e)); return; }
+    }
     setTabs(prev => prev.filter(t => t.id !== doc.id));
     if (active === doc.id) setActive(tabs.find(t => t.id !== doc.id)?.id ?? '');
   };

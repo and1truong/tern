@@ -52,6 +52,9 @@ test("standalone API persists state and recent files, denies implicit access/wri
     db.close(); db = openAppDatabase(join(dir, 'app.sqlite')); app = makeApp(db);
     const saved = await app(new Request('http://localhost/api/state?key=sql:test'));
     expect(await saved.json()).toEqual({ sql: 'SELECT 42', history: ['SELECT 1'] });
+    expect((await app(new Request('http://localhost/api/state?key=sql:test', { method: 'DELETE' }))).status).toBe(200);
+    expect(await (await app(new Request('http://localhost/api/state?key=sql:test'))).json()).toBeNull();
+    expect(db.query("SELECT count(*) AS n FROM app_state WHERE key = 'sql:test'").get()).toEqual({ n: 0 });
     const recent = await app(new Request('http://localhost/api/recent'));
     expect((await recent.json()).databases[0].path).toBe(path);
     await post('open', { path });

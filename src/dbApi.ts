@@ -36,7 +36,9 @@ function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> 
 
 // Serialize the tiny local state writes so an older request cannot overwrite a newer edit.
 let stateWrite: Promise<unknown> = Promise.resolve();
+const removedState = new Set<string>();
 function saveState(key: string, value: unknown) {
+  if (removedState.has(key)) return stateWrite;
   stateWrite = stateWrite.catch(() => {}).then(() => post(`${API}/state`, { key, value }));
   return stateWrite;
 }
@@ -50,6 +52,15 @@ export const dbApi = {
   state: {
     get: <T>(key: string) => fetch(`${API}/state?key=${encodeURIComponent(key)}`).then(asJson<T | null>),
     set: saveState,
+    remove: (key: string) => {
+      // Closing a document is permanent; ignore its unmount flush and late query saves.
+      removedState.add(key);
+      stateWrite = stateWrite.catch(() => {}).then(() => fetch(`${API}/state?key=${encodeURIComponent(key)}`, { method: "DELETE" }).then(asJson)).catch(error => {
+        removedState.delete(key);
+        throw error;
+      });
+      return stateWrite;
+    },
   },
   create: (path: string) => post<{ path: string; created: true }>(`${API}/create`, { path }),
   schema: (src: DbSource) =>

@@ -106,3 +106,9 @@ test("exports nonfinite numbers without replacing them with NULL", () => {
   expect(serializeRows("csv", ["n"], rows)).toBe("n\nInfinity\n-Infinity");
   expect(JSON.parse(serializeRows("json", ["n"], rows))).toEqual([{ n: "Infinity" }, { n: "-Infinity" }]);
 });
+
+test("CSV preserves exact whitespace in exported column names", () => {
+  const columns = ["name", " name ", " ", " quoted, name "];
+  const rows = [{ "name": "plain", " name ": "padded", " ": "space", " quoted, name ": "quoted" }];
+  expect(parseCsv(serializeRows("csv", columns, rows))).toEqual({ columns, rows });
+});

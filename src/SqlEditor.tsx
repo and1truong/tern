@@ -89,7 +89,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     schema: completionSchema,
   })], [source.kind, completionSchema]);
 
-  const run = async (all: boolean) => {
+  const run = async (all: boolean, forceWrite = false) => {
     if (busy || !ready) return;
     const view = editor.current;
     const selection = view?.state.selection.main ?? { from: 0, to: 0 };
@@ -107,7 +107,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     for (const statement of statements) {
       if (abort.signal.aborted) break;
       const started = performance.now();
-      const isWrite = transaction || isWriteSql(statement, source.kind);
+      const isWrite = forceWrite || transaction || isWriteSql(statement, source.kind);
       if (isWrite && !writable) {
         nextOutputs.push({ sql: statement, error: "Read-only mode: enable Writable before running this statement." });
         break;
@@ -186,6 +186,9 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
               className="px-3 py-1.5 rounded-md text-xs font-bold bg-[var(--accent)] text-[var(--panel)] disabled:opacity-40">Run</button>
             <button onClick={() => void run(true)} disabled={!ready || busy || !active.sql.trim()}
               className="px-3 py-1.5 rounded-md text-xs font-semibold border border-[var(--border-2)] text-[var(--muted)] disabled:opacity-40">Run all</button>
+            {source.kind === "postgres" && writable && <button onClick={() => void run(false, true)} disabled={!ready || busy || !active.sql.trim()}
+              title="Run selection or current statement with write access, including stored functions that modify data"
+              className="px-3 py-1.5 rounded-md text-xs font-semibold border border-[var(--border-2)] text-[var(--muted)] disabled:opacity-40">Run as write</button>}
             <button onClick={() => void explain()} disabled={!ready || busy || !active.sql.trim()}
               className="px-3 py-1.5 rounded-md text-xs font-semibold border border-[var(--border-2)] text-[var(--muted)] disabled:opacity-40">Explain</button>
             {busy && controller.current && <button onClick={() => controller.current?.abort()} className="px-3 py-1.5 rounded-md text-xs font-semibold text-[var(--red)]">Cancel</button>}

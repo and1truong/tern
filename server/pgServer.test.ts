@@ -84,6 +84,21 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("stored functions can write through explicit writable execution", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_function_test');
+    try {
+      await runPgExec(url, `CREATE TABLE pgserver_function_test.t(v integer);
+        INSERT INTO pgserver_function_test.t VALUES(0);
+        CREATE FUNCTION pgserver_function_test.bump() RETURNS integer LANGUAGE sql AS $$
+          UPDATE pgserver_function_test.t SET v=v+1 RETURNING v
+        $$;`);
+      await expect(runPgQuery(url, 'SELECT pgserver_function_test.bump()', [])).rejects.toThrow();
+      expect((await runPgExec(url, 'SELECT pgserver_function_test.bump()')).result?.rows).toEqual([{ 'Column 1': 1 }]);
+      expect((await runPgQuery(url, 'SELECT v FROM pgserver_function_test.t', [])).rows).toEqual([{ v: 1 }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_function_test CASCADE'); }
+  });
+
+
   test("owned sequence DDL preserves its custom name, options and dependency", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_owned_test');
     try {

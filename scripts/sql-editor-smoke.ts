@@ -2,6 +2,7 @@
 import { Window } from "happy-dom";
 
 const writes: unknown[] = [];
+const executions: any[] = [];
 const saved = { tabs: [{ id: "console-1", name: "Console 1", sql: "SELECT 1 AS answer;" }], activeId: "console-1", history: [] };
 const win = new Window({ url: "http://localhost/" });
 for (const key of [
@@ -19,6 +20,7 @@ Object.defineProperty(win, "matchMedia", { value: () => ({ matches: false, addEv
   const url = String(input);
   if (url.includes("/state?")) return Response.json(saved);
   if (url.endsWith("/state")) { writes.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }
+  if (url.endsWith("/exec")) { executions.push(JSON.parse(String(init?.body))); return Response.json({ rowsAffected: 1, ms: 1 }); }
   if (url.endsWith("/query")) return Response.json({ columns: ["answer"], rows: [{ answer: 1 }], ms: 1, hasMore: false, offset: 0 });
   if (url.endsWith("/explain")) return Response.json({ columns: ["detail"], rows: [{ detail: "SCAN constant row" }], ms: 1, hasMore: false, offset: 0 });
   return Response.json({ error: "unexpected smoke request" }, { status: 500 });
@@ -69,6 +71,17 @@ async function exercise(width: number) {
   history?.click();
   await settle();
   if (!container.textContent?.includes("Query history") || !container.textContent?.includes("SELECT 1 AS answer")) fail(`${width}px: query history did not render`);
+
+  if (container.textContent?.includes("Run as write")) fail("Write override exposed in read-only mode");
+  flushSync(() => root.render(React.createElement(SqlEditor, {
+    documentId: "test-query", onDirty: () => {}, source: { kind: "postgres", connectionId: "test" }, schema,
+    writable: true, onExeced: () => {},
+  })));
+  const override = [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Run as write");
+  const before = executions.length;
+  override?.click();
+  await settle(); await settle();
+  if (executions.length !== before + 1 || !executions.at(-1)?.sql.includes("SELECT 1")) fail("Write override did not route SELECT through exec");
 
   flushSync(() => root.unmount());
   container.remove();

@@ -30,6 +30,12 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
           const row = db.query<{ value: string }, [string]>("SELECT value FROM app_state WHERE key = ?").get(url.searchParams.get("key") ?? "");
           return Response.json(row ? JSON.parse(row.value) : null);
         }
+        if (req.method === "DELETE") {
+          const key = url.searchParams.get("key");
+          if (!key?.startsWith("sql:") || key.length > 200) return fail("Invalid SQL state key");
+          db.query("DELETE FROM app_state WHERE key = ?").run(key);
+          return Response.json({ ok: true });
+        }
         if (req.method === "POST") {
           const { key, value } = await req.json();
           if (typeof key !== "string" || key.length > 200 || !/^(documents|sql:|layout|preferences)/.test(key)) return fail("Invalid state key");
