@@ -372,6 +372,18 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SCHEMA tern_ddl_options CASCADE'); }
   });
 
+  test("DDL replay preserves unlogged table persistence", async () => {
+    await runPgExec(url, 'CREATE UNLOGGED TABLE public.tern_unlogged_test(id integer)');
+    try {
+      const table = (await readPgSchema(url)).tables.find(t => t.schema === 'public' && t.name === 'tern_unlogged_test')!;
+      expect(table.ddl).toStartWith('CREATE UNLOGGED TABLE');
+      await runPgExec(url, 'DROP TABLE public.tern_unlogged_test');
+      await runPgExec(url, table.ddl);
+      const result = await runPgQuery(url, "SELECT relpersistence FROM pg_class WHERE oid = 'public.tern_unlogged_test'::regclass", []);
+      expect(result.rows[0]?.relpersistence).toBe('u');
+    } finally { await runPgExec(url, 'DROP TABLE public.tern_unlogged_test'); }
+  });
+
   test("partition DDL restores bounds and routing", async () => {
     await runPgExec(url, 'CREATE SCHEMA tern_partition_test; CREATE TABLE tern_partition_test.parent(id integer) PARTITION BY RANGE(id); CREATE TABLE tern_partition_test.child PARTITION OF tern_partition_test.parent FOR VALUES FROM(0) TO(10)');
     try {

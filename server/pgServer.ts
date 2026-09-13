@@ -169,7 +169,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
               CASE WHEN a.attcollation <> typ.typcollation THEN format('%I.%I', cn.nspname, coll.collname) END AS collation,
               pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
-              t.table_type, pg_get_partkeydef(rel.oid) AS partition_key,
+              t.table_type, rel.relpersistence, pg_get_partkeydef(rel.oid) AS partition_key,
               CASE WHEN rel.relispartition THEN pg_get_expr(rel.relpartbound, rel.oid) END AS partition_bound,
               (SELECT format('%I.%I', pn.nspname, parent.relname) FROM pg_inherits inh
                 JOIN pg_class parent ON parent.oid = inh.inhparent
@@ -465,7 +465,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       const body = definitions.join(",\n");
       const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
       const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name)!;
-      t.ddl = `CREATE TABLE ${relation} (\n${body}\n)${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
+      t.ddl = `CREATE ${metadata.relpersistence === "u" ? "UNLOGGED " : ""}TABLE ${relation} (\n${body}\n)${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
       if (metadata.partition_bound) t.ddl += `\nALTER TABLE ${metadata.parent_relation} ATTACH PARTITION ${relation} ${metadata.partition_bound};`;
     }
 

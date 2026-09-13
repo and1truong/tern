@@ -131,9 +131,8 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
     touch: (id) => { db.query("UPDATE pg_connections SET last_used_at = unixepoch() WHERE id = ?").run(id); },
     delete: async (id) => {
       const found = row(id);
-      const deleted = db.query("DELETE FROM pg_connections WHERE id = ?").run(id).changes > 0;
-      if (deleted && found?.secret_name) await secrets.delete(found.secret_name).catch(() => false);
-      return deleted;
+      if (found?.secret_name) await secrets.delete(found.secret_name);
+      return db.query("DELETE FROM pg_connections WHERE id = ?").run(id).changes > 0;
     },
   };
   return api;

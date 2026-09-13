@@ -84,3 +84,24 @@ test("invalid connection descriptors and unavailable secret storage never persis
   expect(await connections.list()).toEqual([]);
   db.close();
 });
+
+test("credential deletion failure retains the profile for retry", async () => {
+  const db = freshDb();
+  const store = new Map<string, string>();
+  let fail = true;
+  const c = makeConnections(db, {
+    get: async name => store.get(name) ?? null,
+    set: async (name, value) => { store.set(name, value); },
+    delete: async name => { if (fail) throw new Error("credential deletion denied"); return store.delete(name); },
+  });
+  try {
+    const saved = await c.save("test", "postgres://u:p@h/db");
+    await expect(c.delete(saved.id)).rejects.toThrow("credential deletion denied");
+    expect(await c.get(saved.id)).not.toBeNull();
+    expect(store.size).toBe(1);
+    fail = false;
+    expect(await c.delete(saved.id)).toBe(true);
+    expect(await c.get(saved.id)).toBeNull();
+    expect(store.size).toBe(0);
+  } finally { db.close(); }
+});
