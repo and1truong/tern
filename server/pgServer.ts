@@ -164,9 +164,9 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
   try {
     // Tables + views in user schemas, with column lists in one shot.
     const cols = await db.unsafe(
-      `SELECT c.table_schema, c.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
+      `SELECT t.table_schema, t.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               c.is_nullable, c.ordinal_position, c.column_default,
-              pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) AS owned_sequence,
+              pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
               t.table_type, pg_get_partkeydef(rel.oid) AS partition_key,
               CASE WHEN rel.relispartition THEN pg_get_expr(rel.relpartbound, rel.oid) END AS partition_bound,
@@ -174,15 +174,14 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
                 JOIN pg_class parent ON parent.oid = inh.inhparent
                 JOIN pg_namespace pn ON pn.oid = parent.relnamespace
                 WHERE inh.inhrelid = rel.oid LIMIT 1) AS parent_relation
-         FROM information_schema.columns c
-         JOIN pg_namespace n ON n.nspname = c.table_schema
-         JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = c.table_name
-         JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name
-         JOIN information_schema.tables t
-           ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-        WHERE c.table_schema NOT IN ('pg_catalog','information_schema')
+         FROM information_schema.tables t
+         JOIN pg_namespace n ON n.nspname = t.table_schema
+         JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = t.table_name
+         LEFT JOIN information_schema.columns c ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+         LEFT JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name
+        WHERE t.table_schema NOT IN ('pg_catalog','information_schema')
           AND t.table_type IN ('BASE TABLE','VIEW','FOREIGN')
-        ORDER BY c.table_schema, c.table_name, c.ordinal_position`,
+        ORDER BY t.table_schema, t.table_name, c.ordinal_position`,
     ) as Record<string, unknown>[];
 
     const materializedColumns = await db.unsafe(
@@ -194,7 +193,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
               'MATERIALIZED VIEW' AS table_type
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
-         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+         LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
          LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
         WHERE c.relkind = 'm' AND n.nspname NOT IN ('pg_catalog','information_schema')
         ORDER BY n.nspname, c.relname, a.attnum`,
@@ -202,13 +201,13 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     cols.push(...materializedColumns);
 
     const materializedDefinitions = await db.unsafe(
-      `SELECT schemaname AS table_schema, matviewname AS table_name, definition
+      `SELECT schemaname AS table_schema, matviewname AS table_name, definition, ispopulated
          FROM pg_matviews
         WHERE schemaname NOT IN ('pg_catalog','information_schema')`,
     ) as Record<string, unknown>[];
     const materializedDdl = new Map(materializedDefinitions.map((row) => [
       `${row.table_schema}\0${row.table_name}`,
-      `CREATE MATERIALIZED VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "")}`,
+      `CREATE MATERIALIZED VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "").trim().replace(/;$/, "")}${row.ispopulated === false ? "\nWITH NO DATA" : ""};`,
     ]));
     const viewDefinitions = await db.unsafe(
       `SELECT schemaname AS table_schema, viewname AS table_name, definition
@@ -355,6 +354,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         };
         byTable.set(name, tbl);
       }
+      if (c.column_name == null) continue;
       const keyId = `${schema}\0${bare}\0${c.column_name}`;
       const col: DbColumn = {
         name: String(c.column_name),
@@ -438,7 +438,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${generation}${c.notNull ? " NOT NULL" : ""}`;
       });
       for (const constraint of constraints.filter(c => c.schema === t.schema && c.table === t.name)) {
-        definitions.push(`  ${constraint.definition}`);
+        definitions.push(`  CONSTRAINT "${constraint.name.replace(/"/g, '""')}" ${constraint.definition}`);
       }
       const body = definitions.join(",\n");
       const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;

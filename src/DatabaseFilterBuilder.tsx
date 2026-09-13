@@ -37,7 +37,7 @@ function GroupView({ group, cols, dialect, depth, onChange, onRemove }: {
           <option value="OR">any</option>
         </select>
         <span className="text-[var(--faint)]">of</span>
-        <button onClick={addRule} title="Add rule"
+        <button onClick={addRule} disabled={!cols.length} title="Add rule"
           className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[var(--accent)] hover:bg-[var(--hover)] font-semibold">
           <Plus size={11} /> rule
         </button>

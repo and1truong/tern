@@ -152,10 +152,12 @@ pgDescribe("pgServer (live)", () => {
       await runPgExec(url, 'CREATE TABLE pgserver_constraints_test.parent (id integer PRIMARY KEY)');
       await runPgExec(url, `CREATE TABLE pgserver_constraints_test.original (
         id integer PRIMARY KEY, code text UNIQUE, parent_id integer REFERENCES pgserver_constraints_test.parent(id),
-        amount integer CHECK (amount > 0), span int4range, EXCLUDE USING gist (span WITH &&)
+        amount integer CONSTRAINT "custom check" CHECK (amount > 0), span int4range, EXCLUDE USING gist (span WITH &&)
       )`);
       const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_constraints_test' && t.name === 'original')!;
+      await runPgExec(url, 'DROP TABLE pgserver_constraints_test.original');
       await runPgExec(url, table.ddl!.replace('"original"', '"copy"'));
+      expect((await readPgSchema(url)).constraints?.some(c => c.table === 'copy' && c.name === 'custom check')).toBe(true);
       await runPgExec(url, 'INSERT INTO pgserver_constraints_test.parent VALUES (1)');
       await runPgExec(url, "INSERT INTO pgserver_constraints_test.copy VALUES (1, 'one', 1, 1, '[1,5)')");
       for (const values of ["(2, 'one', 1, 1, '[6,9)')", "(2, 'two', 99, 1, '[6,9)')", "(2, 'two', 1, -1, '[6,9)')", "(2, 'two', 1, 1, '[2,6)')"]) {
@@ -223,6 +225,7 @@ pgDescribe("pgServer (live)", () => {
       const schema = await readPgSchema(url);
       const ddl = schema.tables.find(t => t.schema === 'pgserver_ddl_test' && t.name === 'original')!.ddl!;
       expect(ddl).toContain('PRIMARY KEY (b, a)');
+      await runPgExec(url, 'DROP TABLE pgserver_ddl_test.original');
       await runPgExec(url, ddl.replace('"original"', '"copy"'));
     } finally { await runPgExec(url, 'DROP SCHEMA pgserver_ddl_test CASCADE'); }
   });
@@ -335,6 +338,21 @@ pgDescribe("pgServer (live)", () => {
       expect((await runPgQuery(url, 'SELECT id FROM tern_partition_test.child', [])).rows).toEqual([{ id: 5 }]);
       await expect(runPgExec(url, 'INSERT INTO tern_partition_test.child VALUES(20)')).rejects.toThrow();
     } finally { await runPgExec(url, 'DROP SCHEMA tern_partition_test CASCADE'); }
+  });
+
+  test("catalog preserves empty relations and unpopulated materialized views", async () => {
+    await runPgExec(url, 'CREATE SCHEMA tern_empty_test; CREATE TABLE tern_empty_test.marker (); INSERT INTO tern_empty_test.marker DEFAULT VALUES; CREATE MATERIALIZED VIEW tern_empty_test.pending AS SELECT 1 AS n WITH NO DATA');
+    try {
+      const schema = await readPgSchema(url);
+      const marker = schema.tables.find(t => t.schema === 'tern_empty_test' && t.name === 'marker')!;
+      expect(marker.columns).toEqual([]);
+      expect((await runPgQuery(url, 'SELECT * FROM tern_empty_test.marker', [])).rows).toEqual([{}]);
+      const pending = schema.tables.find(t => t.schema === 'tern_empty_test' && t.name === 'pending')!;
+      expect(pending.ddl).toContain('WITH NO DATA');
+      await runPgExec(url, 'DROP TABLE tern_empty_test.marker; DROP MATERIALIZED VIEW tern_empty_test.pending');
+      await runPgExec(url, marker.ddl + pending.ddl);
+      expect((await runPgQuery(url, "SELECT ispopulated FROM pg_matviews WHERE schemaname='tern_empty_test' AND matviewname='pending'", [])).rows).toEqual([{ ispopulated: false }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_empty_test CASCADE'); }
   });
 
   test("query refuses write statements", async () => {

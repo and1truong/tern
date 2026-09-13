@@ -123,7 +123,7 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
       await editor.pressSequentially(statement);
       await page.getByRole('button', { name: 'Run all', exact: true }).click();
     };
-    await run("CREATE TABLE verify.filter_test (id integer, last text); INSERT INTO verify.filter_test VALUES (1, '100%_!'), (2, '1000');");
+    await run("CREATE TABLE verify.marker (); CREATE TABLE verify.filter_test (id integer, last text); INSERT INTO verify.filter_test VALUES (1, '100%_!'), (2, '1000');");
     await page.getByRole('button', { name: /verify.filter_test.*2c/ }).click();
     await page.getByRole('button', { name: 'Filter', exact: true }).click();
     await page.getByTitle('Add rule', { exact: true }).click();
@@ -141,6 +141,9 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await run('EXPLAIN ANALYZE UPDATE verify.filter_test SET id=id+10;');
     await expect(page.getByRole('columnheader', { name: 'QUERY PLAN', exact: true })).toBeVisible();
     expect(sql('SELECT sum(id) FROM verify.filter_test')).toBe('23');
+    await page.getByRole('button', { name: /verify.marker.*0c/ }).click();
+    await page.getByRole('button', { name: 'Filter', exact: true }).click();
+    await expect(page.locator('button[title="Add rule"]:visible')).toBeDisabled();
     await page.getByRole('tab', { name: 'verify.filter_test', exact: true }).click();
     await expect(page.getByRole('cell', { name: '11', exact: true })).toBeVisible();
     await expect(page.getByRole('cell', { name: '12', exact: true })).toBeVisible();
