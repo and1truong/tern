@@ -337,7 +337,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
                           className="w-full min-w-16 bg-[var(--bg)] border border-[var(--accent)] rounded px-1 outline-none" />
                       ) : isNull ? <span className="italic text-[var(--faint)]">NULL</span> : (() => {
                         const display = displayDbValue(value);
-                        return display.length > 160
+                        return isDbBinaryValue(value) || display.length > 160
                           ? <button title="Open large value" onClick={() => setInspecting({ column: c, value })} className="max-w-80 text-left truncate text-[var(--accent)]">{display}</button>
                           : display;
                       })()}

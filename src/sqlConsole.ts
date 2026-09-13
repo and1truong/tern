@@ -172,10 +172,11 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
   if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0])) return true;
   if (dialect === "postgres" && ["SELECT", "WITH"].includes(words[0])) {
     let depth = 0;
-    for (const word of words) {
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
       if (word === "(") depth++;
       if (word === ")") depth--;
-      if (depth === 0 && word === "INTO") return true;
+      if ((depth === 0 && word === "INTO") || (word === "FOR" && /^(UPDATE|NO KEY UPDATE|SHARE|KEY SHARE)( |$)/.test(words.slice(i + 1).join(" ")))) return true;
     }
   }
   if (words[0] !== "WITH") return false;

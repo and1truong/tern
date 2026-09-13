@@ -8,6 +8,7 @@ import type { DbSource } from "./dbApi.ts";
 import { isWriteSql, sqlToRun, executionUnits } from "./sqlConsole.ts";
 import Notice from "./Notice.tsx";
 import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../binaryValues.ts";
+import { boundConsoleHistory } from "./consoleHistory.ts";
 
 interface ConsoleTab { id: string; name: string; sql: string }
 interface HistoryEntry { id: string; sql: string; ranAt: number; ms: number; ok: boolean }
@@ -49,7 +50,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     dbApi.state.get<SavedConsole>(storageKey).then((value) => {
-      if (isSavedConsole(value)) setConsole(value);
+      if (isSavedConsole(value)) setConsole(boundConsoleHistory(value));
       setReady(true);
     }).catch((e) => setError(String(e)));
   }, [storageKey]);
@@ -60,6 +61,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     controller.current?.abort();
   }, [storageKey]);
   const persist = (next: SavedConsole) => {
+    next = boundConsoleHistory(next);
     const version = ++saveVersion.current;
     setConsole(next);
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
@@ -69,10 +71,10 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
   const active = consoleState.tabs.find((tab) => tab.id === consoleState.activeId) ?? consoleState.tabs[0];
   const updateSql = (value: string) => {
     const version = ++saveVersion.current;
-    const next = {
+    const next = boundConsoleHistory({
       ...consoleState,
       tabs: consoleState.tabs.map((tab) => tab.id === active.id ? { ...tab, sql: value } : tab),
-    };
+    });
     setConsole(next);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     onDirty(true);

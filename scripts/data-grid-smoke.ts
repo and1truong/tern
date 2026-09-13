@@ -131,6 +131,13 @@ async function exercise(width: number) {
   await settle();
   if (byLabel("Edit row 3 name")) fail(`${width}px: binary cell incorrectly opened the text editor`);
 
+  binaryCell.querySelector("button")?.click();
+  await settle();
+  const binaryInspector = container.querySelector('[role="dialog"][aria-label="Large value inspector"]');
+  if (!binaryInspector?.textContent?.includes("Base64:") || !binaryInspector.textContent.includes("AA==")) fail(`${width}px: binary inspector is missing payload`);
+  byLabel("Close large value")?.click();
+  await settle();
+
   const objectCell = [...container.querySelectorAll("td")].find((cell) => cell.textContent?.trim() === '{"ok":true}');
   if (!objectCell) fail(`${width}px: object-valued cell is missing`);
   objectCell.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));

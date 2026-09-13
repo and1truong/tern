@@ -125,3 +125,13 @@ test("PostgreSQL SELECT INTO uses writable execution including CTE and EXPLAIN",
   expect(isWriteSql('SELECT "INTO", \'INTO\' FROM users /* INTO */', "postgres")).toBe(false);
   expect(isWriteSql("SELECT (SELECT 1 AS x) FROM users", "postgres")).toBe(false);
 });
+
+test("PostgreSQL locking SELECT clauses require writable execution", () => {
+  for (const lock of ["UPDATE", "NO KEY UPDATE", "SHARE", "KEY SHARE"]) {
+    expect(isWriteSql("SELECT * FROM jobs FOR " + lock, "postgres")).toBe(true);
+    expect(isWriteSql("WITH x AS (SELECT 1) SELECT * FROM jobs FOR " + lock, "postgres")).toBe(true);
+  }
+  expect(isWriteSql("WITH locked AS (SELECT * FROM jobs FOR UPDATE) SELECT * FROM locked", "postgres")).toBe(true);
+  expect(isWriteSql("EXPLAIN ANALYZE SELECT * FROM jobs FOR UPDATE", "postgres")).toBe(true);
+  expect(isWriteSql("SELECT 'FOR UPDATE' /* FOR SHARE */", "postgres")).toBe(false);
+});
