@@ -82,6 +82,18 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("SHOW returns named read-only results with paging", async () => {
+    const path = await runPgQuery(url, '/* inspect */ SHOW search_path', []);
+    expect(path.columns).toEqual(['search_path']);
+    expect(typeof path.rows[0].search_path).toBe('string');
+    const isolation = await runPgQuery(url, 'SHOW transaction_isolation', []);
+    expect(isolation.columns).toEqual(['transaction_isolation']);
+    const all = await runPgQuery(url, 'SHOW ALL', [], 1, 1);
+    expect(all.columns).toEqual(['name', 'setting', 'description']);
+    expect(all.rows).toHaveLength(1);
+    expect(all.hasMore).toBe(true);
+  });
+
   test("empty results retain duplicate column headers and catalog types replay", async () => {
     const empty = await runPgQuery(url, 'SELECT 1 AS id, 2 AS id WHERE false', []);
     expect(empty.columns).toEqual(['id', 'id (2)']);
@@ -194,4 +206,10 @@ pgDescribe("pgServer (live)", () => {
   test("bad connection surfaces a DbError", async () => {
     await expect(readPgSchema("postgres://nobody:nobody@127.0.0.1:1/none")).rejects.toBeInstanceOf(DbError);
   });
+});
+
+
+test('public foreign-key targets remain schema-qualified', () => {
+  const metadata = collectPgKeyMetadata([{ table_schema: 'audit', table_name: 'events', column_name: 'actor_id', constraint_type: 'FOREIGN KEY', ref_schema: 'public', ref_table: 'users', ref_column: 'id' }]);
+  expect(metadata.foreign.get('audit.events.actor_id')).toBe('public.users(id)');
 });

@@ -5,7 +5,7 @@ import { validateMigrationSql } from "./migrationSafety.ts";
 // extra dependency. Connections are opened per request and closed in a finally,
 // matching dbServer.ts's open-on-each-call SQLite pattern — no pool to manage.
 import { SQL } from "bun";
-import { assertReadOnlySql, boundReadSql } from "./sqlSafety.ts";
+import { assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
 import { awaitControlled, type CancellableQuery } from "./queryControl.ts";
 import { compileRowChanges, toPostgresMutationSql } from "./rowMutations.ts";
 import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared.ts";
@@ -73,7 +73,7 @@ export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
     if (row.constraint_type === "PRIMARY KEY") primary.add(key);
     else if (row.constraint_type === "FOREIGN KEY" && row.ref_table) {
       const refSchema = String(row.ref_schema ?? "");
-      const refTable = `${refSchema && refSchema !== "public" ? `${refSchema}.` : ""}${String(row.ref_table)}`;
+      const refTable = `${refSchema ? `${refSchema}.` : ""}${String(row.ref_table)}`;
       foreign.set(key, `${refTable}(${String(row.ref_column)})`);
     } else if (row.constraint_type === "UNIQUE") {
       const group = `${schema}.${table}.${String(row.constraint_name)}`;
@@ -508,11 +508,20 @@ export async function runPgQuery(
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
     const t0 = performance.now();
     let rows: unknown[][];
-    const explain = /^\s*EXPLAIN\b/i.test(boundedSql);
+    const explain = sqlTokens(boundedSql)[0] === "EXPLAIN";
     // Bun values() preserves native values but exposes no column names. Carry
     // labels alongside positional values; json_object_keys retains duplicate keys.
     const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json((SELECT "__dbm_shape" FROM (SELECT "__dbm_result".*) AS "__dbm_shape")))), "__dbm_result".* FROM (VALUES (1)) AS "__dbm_seed" LEFT JOIN LATERAL (SELECT TRUE AS "__dbm_present", "__dbm_rows".* FROM (${boundedSql}) AS "__dbm_rows") AS "__dbm_result" ON TRUE`;
     try {
+      if (sqlTokens(boundedSql)[0] === "SHOW") {
+        const result = await controlledPg(url, connection, connection.unsafe(boundedSql, params), signal, timeoutMs) as Record<string, unknown>[];
+        return {
+          columns: Object.keys(result[0] ?? {}),
+          rows: result.slice(offset, offset + limit),
+          ms: Math.round((performance.now() - t0) * 10) / 10,
+          hasMore: result.length > offset + limit, offset,
+        };
+      }
       const query = connection.unsafe(toPgPlaceholders(positionalSql, params.length), params).values();
       rows = await controlledPg(url, connection, query, signal, timeoutMs) as unknown[][];
     } catch (e) {

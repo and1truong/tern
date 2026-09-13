@@ -52,3 +52,8 @@ test('read expressions do not become write operations', () => {
   }
   expect(() => assertReadOnlySql('WITH x AS (SELECT 1) DELETE FROM t')).toThrow(DbError);
 });
+
+test('SHOW bypasses the subquery wrapper without allowing multiple statements', () => {
+  expect(boundReadSql('SHOW search_path', 10)).toBe('SHOW search_path');
+  expect(() => boundReadSql('SHOW search_path; DELETE FROM t', 10)).toThrow(DbError);
+});

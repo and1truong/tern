@@ -1,6 +1,6 @@
 import { DbError } from "../shared.ts";
 
-const READ_VERBS = new Set(["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA"]);
+const READ_VERBS = new Set(["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"]);
 const READ_PRAGMAS = new Set([
   "APPLICATION_ID", "COLLATION_LIST", "COMPILE_OPTIONS", "DATABASE_LIST", "ENCODING",
   "FOREIGN_KEY_LIST", "FOREIGN_KEYS", "FREELIST_COUNT", "FUNCTION_LIST", "INDEX_INFO",
@@ -105,7 +105,7 @@ export function assertReadOnlySql(sql: string): string {
   const tokens = sqlTokens(normalized);
   const verb = tokens[0] ?? "";
   if (!READ_VERBS.has(verb)) {
-    throw new DbError("not_read_only", `statement must start with SELECT/WITH/EXPLAIN/VALUES or a read PRAGMA (got "${verb}")`);
+    throw new DbError("not_read_only", `statement must start with SELECT/WITH/EXPLAIN/VALUES or SHOW/read PRAGMA (got "${verb}")`);
   }
   if (verb === "PRAGMA") {
     const name = tokens[1] ?? "";
@@ -132,6 +132,6 @@ export function assertReadOnlySql(sql: string): string {
 export function boundReadSql(sql: string, limit: number, offset = 0): string {
   const normalized = assertReadOnlySql(sql);
   const verb = sqlTokens(normalized)[0];
-  if (verb === "EXPLAIN" || verb === "PRAGMA") return normalized;
+  if (verb === "EXPLAIN" || verb === "PRAGMA" || verb === "SHOW") return normalized;
   return `SELECT * FROM (${normalized}\n) AS "__dbm_query" LIMIT ${limit + 1} OFFSET ${offset}`;
 }
