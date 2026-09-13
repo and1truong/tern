@@ -1,5 +1,9 @@
 # Tern
 
+<p align="center">
+  <img src="assets/logo.png" alt="Tern logo" width="220" />
+</p>
+
 **A fast, lightweight, standalone database workbench for SQLite and PostgreSQL, built with Bun and React.**
 
 Tern is a compact, developer-focused database manager inspired by desktop IDEs and workbench-style tools such as Dockyard and DataGrip. It is designed for high information density, fast keyboard-driven workflows, and minimal runtime dependencies.
