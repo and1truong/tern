@@ -58,7 +58,7 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres")
       i = end === -1 ? sql.length : end + 1;
       continue;
     }
-    if (ch === "$") {
+    if (ch === "$" && dialect === "postgres") {
       const tag = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
       if (tag) {
         const end = sql.indexOf(tag, i + tag.length);

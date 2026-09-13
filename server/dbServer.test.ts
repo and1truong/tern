@@ -429,3 +429,11 @@ test('SQLite infinity survives wire transport and optimistic updates', () => {
   expect(runRowChanges(path, [{ kind: 'update', table: { name: 't' }, key: { id: 1 }, expected: row, values: { note: 'new' } }]).rowsAffected).toBe(1);
   expect(runQuery(path, 'SELECT note FROM t', []).rows).toEqual([{ note: 'new' }]);
 });
+
+test('SQLite named dollar parameters cannot hide migration transaction controls', () => {
+  const path = join(dir, 'dollar-migration.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t(id INTEGER)');
+  expect(() => runMigration(path, 'INSERT INTO t VALUES(1); SELECT $a$; COMMIT; SELECT $a$;', false)).toThrow('Transaction control');
+  expect(runQuery(path, 'SELECT * FROM t', []).rows).toEqual([]);
+});

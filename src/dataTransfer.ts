@@ -47,13 +47,22 @@ export function serializeRows(format: ExportFormat, columns: string[], rows: Rec
     if (!table) throw new Error("SQL export requires a table");
     const writableColumns = columns.filter((column) => {
       const metadata = table.columns.find((candidate) => candidate.name === column);
-      return !metadata?.generated && !metadata?.identity;
+      return !metadata?.generated;
     });
     if (!writableColumns.length) {
       return rows.map(() => `INSERT INTO ${tableSql(table)} DEFAULT VALUES;`).join("\n") + "\n";
     }
     const names = writableColumns.map((column) => `"${column.replace(/"/g, '""')}"`).join(", ");
-    return rows.map((row) => `INSERT INTO ${tableSql(table)} (${names}) VALUES (${writableColumns.map((column) => sqlValue(row[column], !!table.schema, table.columns.find(c => c.name === column)?.type)).join(", ")});`).join("\n") + "\n";
+    const override = table.schema && table.columns.some(c => writableColumns.includes(c.name) && c.identityGeneration === "ALWAYS") ? " OVERRIDING SYSTEM VALUE" : "";
+    const inserts = rows.map((row) => `INSERT INTO ${tableSql(table)} (${names})${override} VALUES (${writableColumns.map((column) => sqlValue(row[column], !!table.schema, table.columns.find(c => c.name === column)?.type)).join(", ")});`).join("\n") + "\n";
+    const sequences = table.schema && rows.length ? table.columns.filter(c => c.ownedSequence && writableColumns.includes(c.name)).map(c => {
+      const relation = tableSql(table);
+      const column = `"${c.name.replace(/"/g, '""')}"`;
+      const sequence = `pg_get_serial_sequence('${relation.replace(/'/g, "''")}', '${c.name.replace(/'/g, "''")}')::regclass`;
+      const repair = `BEGIN PERFORM setval(seqrelid, CASE WHEN seqincrement > 0 THEN GREATEST((SELECT MAX(${column}) FROM ${relation}), pg_sequence_last_value(seqrelid), seqstart) ELSE LEAST((SELECT MIN(${column}) FROM ${relation}), pg_sequence_last_value(seqrelid), seqstart) END, true) FROM pg_sequence WHERE seqrelid = ${sequence}; END`;
+      return `DO '${repair.replace(/'/g, "''")}';`;
+    }) : [];
+    return inserts + sequences.map(sql => sql + "\n").join("");
   }
   return [columns.map(column => csvCell(column, true)).join(","), ...displayRows.map((row) => columns.map((column) => csvCell(row[column])).join(","))].join("\n");
 }

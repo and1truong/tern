@@ -372,6 +372,8 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         fk: fk.get(keyId) ?? null,
         defaultValue: c.column_default == null ? null : String(c.column_default),
         identity: c.is_identity === "YES",
+        identityGeneration: c.identity_generation === "ALWAYS" ? "ALWAYS" : c.identity_generation === "BY DEFAULT" ? "BY DEFAULT" : undefined,
+        ownedSequence: c.owned_sequence != null,
         generated: c.is_generated != null && c.is_generated !== "NEVER",
         comparable: comparable.get(keyId) ?? false,
       };

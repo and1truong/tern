@@ -46,7 +46,7 @@ function structuralWords(sql: string, dialect: Dialect = "sqlite", keepQuoted = 
       i = end < 0 ? sql.length : end;
       continue;
     }
-    if (ch === "$") {
+    if (ch === "$" && dialect === "postgres") {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
     }
@@ -104,7 +104,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       i = end < 0 ? sql.length : end;
       continue;
     }
-    if (ch === "$") {
+    if (ch === "$" && dialect === "postgres") {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
     }

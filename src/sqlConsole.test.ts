@@ -4,7 +4,7 @@ import { firstSqlVerb, isWriteSql, splitSqlStatements, sqlToRun, executionUnits 
 describe("SQL console statement selection", () => {
   test("splits scripts without breaking quoted or commented semicolons", () => {
     const sql = `SELECT ';'; -- keep ;\nSELECT $$a;b$$; /* ; */ UPDATE t SET n = 1;`;
-    expect(splitSqlStatements(sql).map((statement) => statement.sql)).toEqual([
+    expect(splitSqlStatements(sql, "postgres").map((statement) => statement.sql)).toEqual([
       `SELECT ';'`,
       `-- keep ;\nSELECT $$a;b$$`,
       `/* ; */ UPDATE t SET n = 1`,
@@ -134,4 +134,10 @@ test("PostgreSQL locking SELECT clauses require writable execution", () => {
   expect(isWriteSql("WITH locked AS (SELECT * FROM jobs FOR UPDATE) SELECT * FROM locked", "postgres")).toBe(true);
   expect(isWriteSql("EXPLAIN ANALYZE SELECT * FROM jobs FOR UPDATE", "postgres")).toBe(true);
   expect(isWriteSql("SELECT 'FOR UPDATE' /* FOR SHARE */", "postgres")).toBe(false);
+});
+
+test('SQLite dollar parameters do not swallow statement boundaries', () => {
+  const sql = 'SELECT $a$; DELETE FROM users; SELECT $a$;';
+  expect(splitSqlStatements(sql, 'sqlite').map(s => s.sql)).toEqual(['SELECT $a$', 'DELETE FROM users', 'SELECT $a$']);
+  expect(splitSqlStatements(sql, 'postgres')).toHaveLength(1);
 });

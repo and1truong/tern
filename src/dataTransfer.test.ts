@@ -52,13 +52,13 @@ test("omits generated columns from SQL exports", () => {
   );
 });
 
-test("omits identity columns and falls back to default-only inserts", () => {
+test("preserves identity values with the required override", () => {
   const identityTable: DbTable = {
     ...table,
-    columns: [{ name: "id", type: "integer", notNull: true, pk: true, fk: null, identity: true }],
+    columns: [{ name: "id", type: "integer", notNull: true, pk: true, fk: null, identity: true, identityGeneration: "ALWAYS" }],
   };
   expect(serializeRows("sql", ["id"], [{ id: 7 }, { id: 8 }], identityTable)).toBe(
-    'INSERT INTO "public"."users" DEFAULT VALUES;\nINSERT INTO "public"."users" DEFAULT VALUES;\n',
+    'INSERT INTO "public"."users" ("id") OVERRIDING SYSTEM VALUE VALUES (7);\nINSERT INTO "public"."users" ("id") OVERRIDING SYSTEM VALUE VALUES (8);\n',
   );
 });
 

@@ -16,6 +16,8 @@ export interface DbColumn {
   fk: string | string[] | null;   // One or more "refsTable(refsCol)" targets
   defaultValue?: string | null;
   identity?: boolean;
+  identityGeneration?: "ALWAYS" | "BY DEFAULT";
+  ownedSequence?: boolean;
   generated?: boolean;
   comparable?: boolean;
 }
