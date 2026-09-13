@@ -1,8 +1,6 @@
 # Tern
 
-<p align="center">
-  <img src="assets/logo.png" alt="Tern logo" width="220" />
-</p>
+![](assets/hero.png)
 
 **A fast, lightweight, standalone database workbench for SQLite and PostgreSQL, built with Bun and React.**
 
