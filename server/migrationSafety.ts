@@ -14,7 +14,8 @@ export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres"
       if (['BEGIN', 'START', 'COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'PREPARE', 'ATTACH', 'DETACH', 'VACUUM', 'PRAGMA'].includes(token)) {
         throw new DbError('sql', `Transaction control and nontransactional operations (${token}) are managed by the migration runner`);
       }
-      trigger = token === 'CREATE' && tokens.slice(i + 1, i + 4).includes('TRIGGER');
+      trigger = token === 'CREATE' && /^(?:(?:TEMP|TEMPORARY) )?TRIGGER(?: |$)/.test(tokens.slice(i + 1, i + 4).join(' '));
+      if (dialect === 'postgres' && token === 'CREATE' && tokens.slice(i + 1, i + 4).join(' ') === 'OR REPLACE TRIGGER') trigger = true;
       first = false;
     }
     if (trigger && (token === 'BEGIN' || token === 'CASE')) depth++;

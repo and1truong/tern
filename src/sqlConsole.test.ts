@@ -141,3 +141,14 @@ test('SQLite dollar parameters do not swallow statement boundaries', () => {
   expect(splitSqlStatements(sql, 'sqlite').map(s => s.sql)).toEqual(['SELECT $a$', 'DELETE FROM users', 'SELECT $a$']);
   expect(splitSqlStatements(sql, 'postgres')).toHaveLength(1);
 });
+
+test('stateful writable batches stay on one execution connection', () => {
+  expect(executionUnits(['CREATE TEMP TABLE t(id integer)', 'SELECT * FROM t'], 'sqlite')).toEqual({ statements: ['CREATE TEMP TABLE t(id integer);\nSELECT * FROM t;'], transaction: true });
+  expect(executionUnits(['SET search_path TO app', 'SELECT * FROM t'], 'postgres').statements).toHaveLength(1);
+  expect(executionUnits(['SELECT 1', 'SELECT 2'], 'postgres').transaction).toBe(false);
+});
+
+test('tables named trigger are not parsed as trigger bodies', () => {
+  expect(splitSqlStatements('CREATE TABLE trigger (begin integer); INSERT INTO trigger VALUES(1); COMMIT;', 'sqlite').map(s => s.sql))
+    .toEqual(['CREATE TABLE trigger (begin integer)', 'INSERT INTO trigger VALUES(1)', 'COMMIT']);
+});

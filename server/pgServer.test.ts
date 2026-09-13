@@ -406,6 +406,30 @@ pgDescribe("pgServer (live)", () => {
     }
   });
 
+  test("DDL replay preserves multiple inheritance and inherited columns", async () => {
+    await runPgExec(url, 'CREATE SCHEMA tern_inherits; CREATE TABLE tern_inherits.a(id integer CHECK(id > 0)); CREATE TABLE tern_inherits.b(note text); CREATE TABLE tern_inherits.child(extra boolean) INHERITS(tern_inherits.a, tern_inherits.b)');
+    try {
+      const child = (await readPgSchema(url)).tables.find(t => t.schema === 'tern_inherits' && t.name === 'child')!;
+      expect(child.ddl).toContain('INHERITS (tern_inherits.a, tern_inherits.b)');
+      await runPgExec(url, 'DROP TABLE tern_inherits.child');
+      await runPgExec(url, child.ddl);
+      await runPgExec(url, "INSERT INTO tern_inherits.child VALUES(1, 'test', true)");
+      expect((await runPgQuery(url, 'SELECT id FROM tern_inherits.a', [])).rows).toEqual([{ id: 1 }]);
+      await runPgExec(url, 'ALTER TABLE tern_inherits.a ADD COLUMN inherited integer');
+      expect((await readPgSchema(url)).tables.find(t => t.name === 'child' && t.schema === 'tern_inherits')?.columns.some(c => c.name === 'inherited')).toBe(true);
+      await runPgExec(url, 'ALTER TABLE tern_inherits.a DROP COLUMN id');
+      expect((await readPgSchema(url)).tables.find(t => t.name === 'child' && t.schema === 'tern_inherits')?.columns.some(c => c.name === 'id')).toBe(false);
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_inherits CASCADE'); }
+  });
+
+  test("writable scripts retain temporary tables and search_path on one session", async () => {
+    await runPgExec(url, 'CREATE SCHEMA tern_session_test');
+    try {
+      await runPgExec(url, 'SET search_path = tern_session_test; CREATE TEMP TABLE scratch(id integer); INSERT INTO scratch VALUES(42); CREATE TABLE saved AS SELECT * FROM scratch');
+      expect((await runPgQuery(url, 'SELECT * FROM tern_session_test.saved', [])).rows).toEqual([{ id: 42 }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_session_test CASCADE'); }
+  });
+
   test("partition DDL restores bounds and routing", async () => {
     await runPgExec(url, 'CREATE SCHEMA tern_partition_test; CREATE TABLE tern_partition_test.parent(id integer) PARTITION BY RANGE(id); CREATE TABLE tern_partition_test.child PARTITION OF tern_partition_test.parent FOR VALUES FROM(0) TO(10)');
     try {
@@ -453,4 +477,14 @@ test('public foreign-key targets remain schema-qualified', () => {
 test('dotted foreign-key targets use the same quoted identity as documents', () => {
   const metadata = collectPgKeyMetadata([{ table_schema: 'audit', table_name: 'events', column_name: 'actor_id', constraint_type: 'FOREIGN KEY', ref_schema: 'a.b', ref_table: 'c', ref_column: 'id' }]);
   expect(metadata.foreign.get('audit\0events\0actor_id')).toEqual(['"a.b"."c"(id)']);
+});
+
+test.skipIf(!process.env.TEST_PG_URL)("PostgreSQL export uses one bounded result beyond the page cap", async () => {
+  const url = process.env.TEST_PG_URL!;
+  const sql = 'SELECT generate_series(1, ?::integer) AS n';
+  const result = await runPgQuery(url, sql, [100_000], undefined, undefined, undefined, undefined, true);
+  expect(result.rows).toHaveLength(100_000);
+  expect(result.rows[99_999]).toEqual({ n: 100_000 });
+  expect(result.hasMore).toBe(false);
+  expect((await runPgQuery(url, sql, [100_001], undefined, undefined, undefined, undefined, true)).hasMore).toBe(true);
 });

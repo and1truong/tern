@@ -57,6 +57,8 @@ export const dbApi = {
   insights: (src: DbSource) => fetch(`${API}/insights?${selectorQuery(src)}`).then(asJson<DatabaseInsights>),
   query: (src: DbSource, sql: string, params: unknown[], limit: number, offset = 0, signal?: AbortSignal, timeoutMs = 30_000) =>
     post<QueryResult>(`${API}/query`, { ...selector(src), sql, params, limit, offset, timeoutMs }, signal),
+  exportAll: (src: DbSource, sql: string, params: unknown[], signal?: AbortSignal) =>
+    post<QueryResult>(`${API}/query`, { ...selector(src), sql, params, exportAll: true }, signal),
   explain: (src: DbSource, sql: string, params: unknown[] = [], signal?: AbortSignal, timeoutMs = 30_000) =>
     post<QueryResult>(`${API}/explain`, { ...selector(src), sql, params, timeoutMs }, signal),
   migration: {

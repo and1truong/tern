@@ -165,16 +165,16 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     // Tables + views in user schemas, with column lists in one shot.
     const cols = await db.unsafe(
       `SELECT t.table_schema, t.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
-              c.is_nullable, c.ordinal_position, c.column_default,
+              c.is_nullable, c.ordinal_position, c.column_default, a.attislocal,
               CASE WHEN a.attcollation <> typ.typcollation THEN format('%I.%I', cn.nspname, coll.collname) END AS collation,
               pg_get_serial_sequence(format('%I.%I', t.table_schema, t.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
               t.table_type, rel.relpersistence, pg_get_partkeydef(rel.oid) AS partition_key,
               CASE WHEN rel.relispartition THEN pg_get_expr(rel.relpartbound, rel.oid) END AS partition_bound,
-              (SELECT format('%I.%I', pn.nspname, parent.relname) FROM pg_inherits inh
+              (SELECT string_agg(format('%I.%I', pn.nspname, parent.relname), ', ' ORDER BY inh.inhseqno) FROM pg_inherits inh
                 JOIN pg_class parent ON parent.oid = inh.inhparent
                 JOIN pg_namespace pn ON pn.oid = parent.relnamespace
-                WHERE inh.inhrelid = rel.oid LIMIT 1) AS parent_relation
+                WHERE inh.inhrelid = rel.oid) AS parent_relation
          FROM information_schema.tables t
          JOIN pg_namespace n ON n.nspname = t.table_schema
          JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = t.table_name
@@ -422,7 +422,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     }));
 
     const constraintRows = await db.unsafe(
-      `SELECT n.nspname AS schema, c.relname AS table_name, con.conname AS name,
+      `SELECT n.nspname AS schema, c.relname AS table_name, con.conname AS name, con.conislocal,
               CASE con.contype WHEN 'p' THEN 'PRIMARY KEY' WHEN 'f' THEN 'FOREIGN KEY'
                 WHEN 'u' THEN 'UNIQUE' WHEN 'c' THEN 'CHECK' WHEN 'x' THEN 'EXCLUDE' ELSE con.contype::text END AS type,
               pg_get_constraintdef(con.oid, true) AS definition,
@@ -451,8 +451,11 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       }
       // Foreign tables need FDW server/options; local CREATE TABLE would misrepresent them.
       if (cols.some(row => row.table_schema === t.schema && row.table_name === t.name && row.table_type === "FOREIGN")) continue;
-      const definitions = t.columns.map(c => {
+      const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name)!;
+      const inherits = metadata.parent_relation && !metadata.partition_bound ? ` INHERITS (${metadata.parent_relation})` : "";
+      const definitions = t.columns.flatMap(c => {
         const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
+        if (inherits && metadata.attislocal === false) return [];
         const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')
           ? ({ smallint: 'smallserial', integer: 'serial', bigint: 'bigserial' } as Record<string, string>)[c.type] : undefined;
         const generation = serialType ? '' : c.identity
@@ -462,12 +465,12 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${metadata.collation ? ` COLLATE ${metadata.collation}` : ""}${generation}${c.notNull ? " NOT NULL" : ""}`;
       });
       for (const constraint of constraints.filter(c => c.schema === t.schema && c.table === t.name)) {
+        if (inherits && constraintRows.some(row => row.schema === t.schema && row.table_name === t.name && row.name === constraint.name && row.conislocal === false)) continue;
         definitions.push(`  CONSTRAINT "${constraint.name.replace(/"/g, '""')}" ${constraint.definition}`);
       }
       const body = definitions.join(",\n");
       const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
-      const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name)!;
-      t.ddl = `CREATE ${metadata.relpersistence === "u" ? "UNLOGGED " : ""}TABLE ${relation} (\n${body}\n)${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
+      t.ddl = `CREATE ${metadata.relpersistence === "u" ? "UNLOGGED " : ""}TABLE ${relation} (\n${body}\n)${inherits}${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
       if (metadata.partition_bound) t.ddl += `\nALTER TABLE ${metadata.parent_relation} ATTACH PARTITION ${relation} ${metadata.partition_bound};`;
     }
 
@@ -538,9 +541,10 @@ export async function runPgQuery(
   offsetRaw?: number,
   signal?: AbortSignal,
   timeoutRaw?: number,
+  exportAll = false,
 ): Promise<QueryResult> {
-  const limit = Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
-  const offset = Math.max(Math.floor(offsetRaw ?? 0), 0);
+  const limit = exportAll ? 100_000 : Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
+  const offset = exportAll ? 0 : Math.max(Math.floor(offsetRaw ?? 0), 0);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const boundedSql = boundReadSql(sql, limit, offset);
   const db = await open(url);

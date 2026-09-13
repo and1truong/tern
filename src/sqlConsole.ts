@@ -114,7 +114,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       const word = sql.slice(wordStart, i).toUpperCase();
       i--;
       leadingWords.push(word);
-      if (leadingWords[0] === "CREATE" && leadingWords.length <= 3 && word === "TRIGGER") trigger = true;
+      if (word === "TRIGGER" && leadingWords.length <= 4 && (/^CREATE (?:(?:TEMP|TEMPORARY) )?TRIGGER$/.test(leadingWords.join(" ")) || (dialect === "postgres" && leadingWords.join(" ") === "CREATE OR REPLACE TRIGGER"))) trigger = true;
       if (trigger && (word === "BEGIN" || word === "CASE")) bodyDepth++;
       if (trigger && word === "END") bodyDepth--;
       continue;
@@ -223,5 +223,6 @@ export function executionUnits(statements: string[], dialect: Dialect): { statem
     }
   }
   if (open) throw new Error('Include COMMIT or ROLLBACK and run the complete transaction together.');
-  return { statements: transaction ? [statements.join(';\n') + ';'] : statements, transaction };
+  const batch = transaction || (statements.length > 1 && statements.some(statement => isWriteSql(statement, dialect)));
+  return { statements: batch ? [statements.join(';\n') + ';'] : statements, transaction: batch };
 }

@@ -1,3 +1,4 @@
+import { splitSqlStatements } from "../src/sqlConsole.ts";
 import { validateMigrationSql } from "./migrationSafety.ts";
 import { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
@@ -181,9 +182,9 @@ export function assertReadOnly(sql: string): void {
   assertReadOnlySql(sql, "sqlite");
 }
 
-export function runQuery(pathRaw: string, sql: string, params: unknown[], limitRaw?: number, offsetRaw?: number): QueryResult {
-  const limit = Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
-  const offset = Math.max(Math.floor(offsetRaw ?? 0), 0);
+export function runQuery(pathRaw: string, sql: string, params: unknown[], limitRaw?: number, offsetRaw?: number, exportAll = false): QueryResult {
+  const limit = exportAll ? 100_000 : Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
+  const offset = exportAll ? 0 : Math.max(Math.floor(offsetRaw ?? 0), 0);
   const boundedSql = boundReadSql(sql, limit, offset, "sqlite");
   const db = openRead(resolvePath(pathRaw), true);
   try {
@@ -230,13 +231,15 @@ export function runExec(pathRaw: string, sql: string): ExecResult {
       let multiple = false;
       try { returning = sqlTokens(normalizeSingleStatement(sql, "sqlite"), "sqlite").includes("RETURNING"); }
       catch (error) { if (!(error instanceof DbError) || error.code !== "multi_statement") throw error; multiple = true; }
-      if (returning) {
-        const statement = db.prepare(sql);
+      if (returning || multiple) {
+        const statements = multiple ? splitSqlStatements(sql, "sqlite").map(s => s.sql) : [sql];
+        if (statements.length > 1) db.exec(statements.slice(0, -1).join(";\n") + ";");
+        const statement = db.prepare(statements.at(-1)!);
         const labels = statement.columnNames;
-        const rows = statement.values() as unknown[][];
+        const rows = labels.length ? statement.values() as unknown[][] : (statement.run(), []);
         const width = rows[0]?.length ?? labels.length;
         const columns = width === labels.length && new Set(labels).size === labels.length ? labels : Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
-        result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
+        if (columns.length || returning) result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
       } else db.exec(sql);
       rowsAffected = multiple ? null : Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);
     }

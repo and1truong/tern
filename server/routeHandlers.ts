@@ -78,11 +78,11 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
 
     // POST /query  body { path? | connId?, sql, params?, limit? }
     async query(req: Request): Promise<Response> {
-      let b: { path?: string; connId?: string; database?: string; sql?: string; params?: unknown[]; limit?: number; offset?: number; timeoutMs?: number };
+      let b: { path?: string; connId?: string; database?: string; sql?: string; params?: unknown[]; limit?: number; offset?: number; timeoutMs?: number; exportAll?: boolean };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       try {
-        if (b.connId) return Response.json(await runPgQuery(await resolvePgUrl(b.connId, b.database), b.sql ?? "", b.params ?? [], b.limit, b.offset, req.signal, b.timeoutMs));
-        return Response.json(await sqliteTask({ operation: "query", args: [b.path ?? "", b.sql ?? "", b.params ?? [], b.limit, b.offset] }, req.signal, b.timeoutMs));
+        if (b.connId) return Response.json(await runPgQuery(await resolvePgUrl(b.connId, b.database), b.sql ?? "", b.params ?? [], b.limit, b.offset, req.signal, b.timeoutMs, b.exportAll === true));
+        return Response.json(await sqliteTask({ operation: "query", args: [b.path ?? "", b.sql ?? "", b.params ?? [], b.limit, b.offset, b.exportAll === true] }, req.signal, b.timeoutMs));
       } catch (e) { return dbErrorResponse(e); }
     },
 

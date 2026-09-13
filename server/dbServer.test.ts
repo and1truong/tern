@@ -437,3 +437,30 @@ test('SQLite named dollar parameters cannot hide migration transaction controls'
   expect(() => runMigration(path, 'INSERT INTO t VALUES(1); SELECT $a$; COMMIT; SELECT $a$;', false)).toThrow('Transaction control');
   expect(runQuery(path, 'SELECT * FROM t', []).rows).toEqual([]);
 });
+
+test('SQLite writable batches preserve temporary tables and final result values', () => {
+  const path = join(dir, 'session-batch.sqlite');
+  createDatabase(path);
+  const result = runExec(path, "CREATE TEMP TABLE t (id INTEGER); INSERT INTO t VALUES (42); SELECT id FROM t;");
+  expect(result.result?.rows).toEqual([{ id: 42 }]);
+  expect(result.rowsAffected).toBeNull();
+});
+
+test("export reads beyond page cap in one bounded statement", () => {
+  const path = join(dir, "export.sqlite");
+  seed(path);
+  const sql = 'WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?) SELECT n FROM numbers';
+  expect(runQuery(path, sql, [100_000], 100_000).rows).toHaveLength(10_000);
+  const result = runQuery(path, sql, [100_000], undefined, undefined, true);
+  expect(result.rows).toHaveLength(100_000);
+  expect(result.rows[99_999]).toEqual({ n: 100_000 });
+  expect(result.hasMore).toBe(false);
+  expect(runQuery(path, sql, [100_001], undefined, undefined, true).hasMore).toBe(true);
+});
+
+test('a table named trigger cannot conceal migration COMMIT', () => {
+  const path = join(dir, 'trigger-name-migration.sqlite');
+  createDatabase(path);
+  expect(() => runMigration(path, 'CREATE TABLE trigger (begin integer); INSERT INTO trigger VALUES(1); COMMIT;', false)).toThrow('Transaction control');
+  expect(runQuery(path, "SELECT name FROM sqlite_master WHERE name='trigger'", []).rows).toEqual([]);
+});

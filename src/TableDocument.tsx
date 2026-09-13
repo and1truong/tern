@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DbSchema, DbTable, QueryResult } from "../shared.ts";
 import { dbApi, type DbSource } from "./dbApi.ts";
 import { DataGrid, StructurePane } from "./DatabaseViews.tsx";
@@ -45,14 +45,15 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
     return () => abort.abort();
   }, [query, parameters, size, page, revision, table, dirty]);
   const changed = useCallback((value: boolean) => { setDirty(value); onDirty(value); }, [onDirty]);
+  const exportAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => exportAbort.current?.abort(), [source, query, parameters]);
   const exportAll = async () => {
-    const rows: Record<string, unknown>[] = [];
-    for (let offset = 0; offset < 100_000; offset += 5000) {
-      const r = await dbApi.query(source, query, params, 5000, offset);
-      rows.push(...r.rows);
-      if (!r.hasMore) return { columns: r.columns, rows };
-    }
-    throw new Error("Export exceeds 100,000 rows; narrow the filter");
+    exportAbort.current?.abort();
+    const abort = new AbortController();
+    exportAbort.current = abort;
+    const result = await dbApi.exportAll(source, query, params, abort.signal);
+    if (result.hasMore) throw new Error("Export exceeds 100,000 rows; narrow the filter");
+    return result;
   };
   return <div className="document-body">
     <div className="toolbar">
