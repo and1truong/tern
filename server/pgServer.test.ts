@@ -1,4 +1,5 @@
 import { executionUnits, splitSqlStatements } from "../src/sqlConsole.ts";
+import { buildRowChanges, editKey } from "../src/dataGrid.ts";
 import { serializeRows } from "../src/dataTransfer.ts";
 import { compileGroup } from "../src/dbFilter.ts";
 import { describe, test, expect } from "bun:test";
@@ -82,6 +83,25 @@ const pgDescribe = PG ? describe : describe.skip;
 pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
+
+  test("unique indexes provide row identity without partial, expression or INCLUDE columns", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_unique_index_test');
+    try {
+      await runPgExec(url, `CREATE TABLE pgserver_unique_index_test.items (tenant integer NOT NULL, code text NOT NULL, note text, other text NOT NULL UNIQUE);
+        CREATE UNIQUE INDEX items_identity ON pgserver_unique_index_test.items (tenant, code) INCLUDE (note);
+        CREATE UNIQUE INDEX items_partial ON pgserver_unique_index_test.items (note) WHERE note IS NOT NULL;
+        CREATE UNIQUE INDEX items_expression ON pgserver_unique_index_test.items (lower(code));
+        INSERT INTO pgserver_unique_index_test.items VALUES (1, 'a', 'old', 'one');`);
+      const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_unique_index_test' && t.name === 'items')!;
+      expect(table.uniqueKeys).toEqual([['other'], ['tenant', 'code']]);
+      // Exercise the standalone index independently of the constraint-backed key.
+      const rows = (await runPgQuery(url, 'SELECT tenant, code, note, other FROM pgserver_unique_index_test.items', [])).rows;
+      const changes = buildRowChanges({ ...table, uniqueKeys: table.uniqueKeys!.filter(key => key.includes('tenant')) }, rows, { [editKey(0, 'note')]: 'new' }, new Set(), []);
+      expect(changes[0]).toMatchObject({ kind: 'update', key: { tenant: 1, code: 'a' } });
+      await runPgRowChanges(url, changes);
+      expect((await runPgQuery(url, 'SELECT note FROM pgserver_unique_index_test.items', [])).rows).toEqual([{ note: 'new' }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_unique_index_test CASCADE'); }
+  });
 
   test("DDL preserves default, serial, identity and generated behavior", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_defaults_test');

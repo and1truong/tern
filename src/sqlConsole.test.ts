@@ -103,3 +103,17 @@ test('PostgreSQL EXPLAIN routes underlying writes through writable execution', (
   expect(isWriteSql('EXPLAIN ANALYZE SELECT "update" FROM t', 'postgres')).toBe(false);
   expect(isWriteSql('EXPLAIN QUERY PLAN UPDATE t SET n=1', 'sqlite')).toBe(false);
 });
+
+test("comment-only fragments never execute, including trailing cursor comments", () => {
+  for (const dialect of ["sqlite", "postgres"] as const) {
+    const sql = "SELECT 1; -- explanation\n/* trailing */";
+    expect(sqlToRun(sql, { from: sql.length, to: sql.length }, true, dialect)).toEqual(["SELECT 1"]);
+    expect(sqlToRun(sql, { from: sql.length, to: sql.length }, false, dialect)).toEqual(["SELECT 1"]);
+    expect(splitSqlStatements("-- only\n/* comment */;", dialect)).toEqual([]);
+    expect(splitSqlStatements("SELECT 1; /* comment */; SELECT 2;", dialect).map(s => s.sql)).toEqual(["SELECT 1", "SELECT 2"]);
+  }
+});
+
+test("WITH-prefixed SQLite REPLACE uses the write route", () => {
+  expect(isWriteSql("WITH x AS (SELECT 2) REPLACE INTO t SELECT * FROM x", "sqlite")).toBe(true);
+});

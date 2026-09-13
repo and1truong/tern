@@ -58,6 +58,7 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
   let record: string[] = [];
   let value = "";
   let quoted = false;
+  let quoteClosed = false;
   let recordStarted = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
@@ -65,15 +66,16 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
     if (quoted) {
       if (ch === '"') {
         if (text[i + 1] === '"') { value += '"'; i++; }
-        else quoted = false;
+        else { quoted = false; quoteClosed = true; }
       } else value += ch;
       continue;
     }
+    if (quoteClosed && ch !== "," && ch !== "\n" && ch !== "\r") throw new Error("CSV contains text after a closing quote");
     if (ch === '"' && value === "") { quoted = true; continue; }
-    if (ch === ",") { record.push(value); value = ""; continue; }
+    if (ch === ",") { record.push(value); value = ""; quoteClosed = false; continue; }
     if (ch === "\n" || ch === "\r") {
       if (ch === "\r" && text[i + 1] === "\n") i++;
-      record.push(value); value = "";
+      record.push(value); value = ""; quoteClosed = false;
       records.push(record);
       record = [];
       recordStarted = false;

@@ -75,3 +75,10 @@ test('CSV keeps empty parsed records but ignores absent trailing lines', () => {
   expect(parseCsv('a\n""\n').rows).toEqual([{ a: '' }]);
   expect(parseCsv('a\n\n1\n').rows).toEqual([{ a: '' }, { a: '1' }]);
 });
+
+test("CSV rejects text after closing quotes", () => {
+  for (const text of ['value\n"ok"junk', 'value\n"ok" ', '"value"junk\n1']) {
+    expect(() => parseCsv(text)).toThrow("after a closing quote");
+  }
+  expect(parseCsv('a,b\r\n"ok",""\r\n"x","y"').rows).toEqual([{ a: "ok", b: "" }, { a: "x", b: "y" }]);
+});

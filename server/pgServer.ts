@@ -376,11 +376,23 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     }
     // Synthesize a minimal CREATE statement per table for the Structure pane's
     const idx = await db.unsafe(
-      `SELECT schemaname AS schema, tablename AS table_name, indexname AS name, indexdef AS sql
-         FROM pg_indexes
-        WHERE schemaname NOT IN ('pg_catalog','information_schema')
-        ORDER BY indexname`,
+      `SELECT p.schemaname AS schema, p.tablename AS table_name, p.indexname AS name, p.indexdef AS sql,
+              CASE WHEN i.indisunique AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+                THEN ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                  WHERE k.ord <= i.indnkeyatts ORDER BY k.ord) END AS identity_columns
+         FROM pg_indexes p
+         JOIN pg_namespace n ON n.nspname = p.schemaname
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = p.indexname
+         JOIN pg_index i ON i.indexrelid = c.oid
+        WHERE p.schemaname NOT IN ('pg_catalog','information_schema')
+        ORDER BY p.indexname`,
     ) as Record<string, unknown>[];
+    for (const index of idx) {
+      const columns = Array.isArray(index.identity_columns) ? index.identity_columns.map(String) : [];
+      const table = tables.find(t => t.schema === index.schema && t.name === index.table_name);
+      if (table && columns.length && !table.uniqueKeys!.some(key => key.join("\0") === columns.join("\0"))) table.uniqueKeys!.push(columns);
+    }
     const indexes = idx.map((r) => ({
       name: String(r.name), schema: String(r.schema), table: String(r.table_name),
       unique: /\bUNIQUE\b/i.test(String(r.sql ?? "")), sql: String(r.sql ?? ""),

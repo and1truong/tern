@@ -121,14 +121,14 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
     }
     if (ch === ";" && bodyDepth === 0) {
       const statement = sql.slice(start, i).trim();
-      if (statement) statements.push({ sql: statement, from: start, to: i });
+      if (structuralWords(statement, dialect).length) statements.push({ sql: statement, from: start, to: i });
       start = i + 1;
       trigger = false;
       leadingWords.length = 0;
     }
   }
   const statement = sql.slice(start).trim();
-  if (statement) statements.push({ sql: statement, from: start, to: sql.length });
+  if (structuralWords(statement, dialect).length) statements.push({ sql: statement, from: start, to: sql.length });
   return statements;
 }
 
@@ -142,7 +142,7 @@ export function sqlToRun(sql: string, selection: SqlSelection, all: boolean, dia
     selection.from >= statement.from && selection.from <= statement.to,
   );
   const last = statements.at(-1);
-  const trailing = last && selection.from > last.to && /^;\s*$/.test(sql.slice(last.to));
+  const trailing = last && selection.from > last.to && !structuralWords(sql.slice(last.to), dialect).length;
   return current ? [current.sql] : trailing ? [last.sql] : [];
 }
 
@@ -178,7 +178,7 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
     if (word === ")") depth--;
     const startsBody = words[i - 1] === "(" && ["AS", "MATERIALIZED"].includes(words[i - 2]);
     const startsMain = depth === 0 && words[i - 1] === ")";
-    if ((startsBody || startsMain) && ["INSERT", "UPDATE", "DELETE", "MERGE"].includes(word)) return true;
+    if ((startsBody || startsMain) && ["INSERT", "UPDATE", "DELETE", "MERGE", "REPLACE"].includes(word)) return true;
   }
   return false;
 }
