@@ -341,6 +341,7 @@ pgDescribe("pgServer (live)", () => {
     try {
       const table = (await readPgSchema(url)).tables.find(t => t.name === 'pgserver_foreign_test');
       expect(table?.type).toBe('table');
+      expect(table?.ddl).toBe('');
       expect(table?.columns.map(c => c.name)).toEqual(['relname']);
       expect((await runPgQuery(url, 'SELECT * FROM public.pgserver_foreign_test', [], 1)).rows).toHaveLength(1);
     } finally { await runPgExec(url, 'DROP SERVER pgserver_fdw_test CASCADE'); }

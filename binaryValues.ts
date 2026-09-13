@@ -8,6 +8,18 @@ interface DbEscapedJsonValue {
   __ternWire: { kind: "json"; value: unknown };
 }
 
+export interface DbSpecialNumber {
+  __ternWire: { kind: "number"; value: "Infinity" | "-Infinity" | "NaN" };
+}
+
+export function isDbSpecialNumber(value: unknown): value is DbSpecialNumber {
+  if (!hasWireTag(value)) return false;
+  const envelope = value[WIRE_TAG] as Record<string, unknown> | null;
+  return !!envelope && typeof envelope === "object" && Object.keys(value).length === 1
+    && Object.keys(envelope).length === 2 && envelope.kind === "number"
+    && ["Infinity", "-Infinity", "NaN"].includes(envelope.value as string);
+}
+
 function hasWireTag(value: unknown): value is Record<typeof WIRE_TAG, unknown> {
   return !!value && typeof value === "object"
     && Object.prototype.hasOwnProperty.call(value, WIRE_TAG);
@@ -34,6 +46,7 @@ function isEscapedJsonValue(value: unknown): value is DbEscapedJsonValue {
 }
 
 export function unwrapDbValueForDisplay(value: unknown): unknown {
+  if (isDbSpecialNumber(value)) return value[WIRE_TAG].value;
   return isEscapedJsonValue(value) ? value[WIRE_TAG].value : value;
 }
 
@@ -46,6 +59,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export function encodeDbValue(value: unknown): unknown {
+  if (typeof value === "number" && !Number.isFinite(value)) return { [WIRE_TAG]: { kind: "number", value: String(value) } };
   if (typeof value === "bigint") return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
   if (value instanceof Uint8Array) {
     return { [WIRE_TAG]: { kind: "binary", base64: bytesToBase64(value) } };
@@ -57,6 +71,7 @@ export function encodeDbValue(value: unknown): unknown {
 }
 
 export function decodeDbValue(value: unknown): unknown {
+  if (isDbSpecialNumber(value)) return Number(value[WIRE_TAG].value);
   if (isDbBinaryValue(value)) {
     const binary = atob(value[WIRE_TAG].base64);
     return Uint8Array.from(binary, (character) => character.charCodeAt(0));

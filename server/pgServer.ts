@@ -439,6 +439,8 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         t.ddl = viewDdl.get(`${t.schema}\0${t.name}`) ?? "";
         continue;
       }
+      // Foreign tables need FDW server/options; local CREATE TABLE would misrepresent them.
+      if (cols.some(row => row.table_schema === t.schema && row.table_name === t.name && row.table_type === "FOREIGN")) continue;
       const definitions = t.columns.map(c => {
         const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
         const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')

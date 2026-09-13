@@ -1,6 +1,6 @@
+import { serializeRows } from "./dataTransfer.ts";
 import { quoteIdent } from "./sqlIdentifiers.ts";
 import type { DbTable, RowChange } from "../shared.ts";
-import { unwrapDbValueForDisplay } from "../binaryValues.ts";
 
 export type SortDirection = "asc" | "desc";
 export interface SortSpec { column: string; direction: SortDirection }
@@ -27,25 +27,8 @@ export function orderBySql(sorts: SortSpec[]): string {
     .join(", ");
 }
 
-function cellText(value: unknown): string {
-  value = unwrapDbValueForDisplay(value);
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") {
-    try { return JSON.stringify(value); } catch { return String(value); }
-  }
-  return String(value);
-}
-
-function csvCell(value: unknown): string {
-  const text = cellText(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
 export function rowsToCsv(columns: string[], rows: Record<string, unknown>[]): string {
-  return [
-    columns.map(csvCell).join(","),
-    ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(",")),
-  ].join("\n");
+  return serializeRows("csv", columns, rows);
 }
 
 export function coerceCellValue(raw: string, type: string): unknown {

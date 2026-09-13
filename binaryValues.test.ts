@@ -26,3 +26,13 @@ test("retains binary envelopes when unwrapping display values", () => {
   const encoded = encodeDbValue(new Uint8Array([0]));
   expect(unwrapDbValueForDisplay(encoded)).toBe(encoded);
 });
+
+test("nonfinite numbers survive JSON transport and optimistic predicate decoding", () => {
+  for (const value of [Infinity, -Infinity, NaN]) {
+    const wire = JSON.parse(JSON.stringify(encodeDbValue(value)));
+    expect(Object.is(decodeDbValue(wire), value)).toBe(true);
+    expect(unwrapDbValueForDisplay(wire)).toBe(String(value));
+  }
+  const collision = { __ternWire: { kind: "number", value: "Infinity" } };
+  expect(decodeDbValue(JSON.parse(JSON.stringify(encodeDbValue(collision))))).toEqual(collision);
+});

@@ -419,3 +419,13 @@ test('SQLite partial unique indexes remain visible but cannot identify rows', ()
   expect(schema.tables.find(t => t.name === 't')!.uniqueKeys).toEqual([['stable']]);
   expect(schema.indexes.find(i => i.name === 'partial_code')?.unique).toBe(true);
 });
+
+test('SQLite infinity survives wire transport and optimistic updates', () => {
+  const path = join(dir, 'infinity.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t (id INTEGER PRIMARY KEY, value REAL, note TEXT); INSERT INTO t VALUES (1, 1e999, \'old\')');
+  const row = JSON.parse(JSON.stringify(runQuery(path, 'SELECT * FROM t', []).rows[0]));
+  expect(row.value).toEqual({ __ternWire: { kind: 'number', value: 'Infinity' } });
+  expect(runRowChanges(path, [{ kind: 'update', table: { name: 't' }, key: { id: 1 }, expected: row, values: { note: 'new' } }]).rowsAffected).toBe(1);
+  expect(runQuery(path, 'SELECT note FROM t', []).rows).toEqual([{ note: 'new' }]);
+});

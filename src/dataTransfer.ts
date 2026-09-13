@@ -1,16 +1,21 @@
 import type { DbTable } from "../shared.ts";
 import { tableSql } from "./sqlIdentifiers.ts";
-import { decodeDbValue, isDbBinaryValue, unwrapDbValueForDisplay } from "../binaryValues.ts";
+import { decodeDbValue, isDbBinaryValue, isDbSpecialNumber, unwrapDbValueForDisplay } from "../binaryValues.ts";
 
 export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 
-function csvCell(value: unknown): string {
-  if (value == null) return "";
-  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+function csvCell(value: unknown, header = false): string {
+  if (value == null) return "\\N";
+  let text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  if (!header && text.startsWith("\\")) text = "\\" + text;
+  return (text === "" || /[",\r\n]/.test(text)) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function sqlValue(value: unknown, postgres: boolean, type = ""): string {
+  if (isDbSpecialNumber(value) && !postgres) {
+    if (value.__ternWire.value === "NaN") throw new Error("SQLite cannot represent NaN");
+    return value.__ternWire.value === "Infinity" ? "1e999" : "-1e999";
+  }
   if (isDbBinaryValue(value)) {
     const bytes = decodeDbValue(value) as Uint8Array;
     const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
@@ -50,7 +55,7 @@ export function serializeRows(format: ExportFormat, columns: string[], rows: Rec
     const names = writableColumns.map((column) => `"${column.replace(/"/g, '""')}"`).join(", ");
     return rows.map((row) => `INSERT INTO ${tableSql(table)} (${names}) VALUES (${writableColumns.map((column) => sqlValue(row[column], !!table.schema, table.columns.find(c => c.name === column)?.type)).join(", ")});`).join("\n") + "\n";
   }
-  return [columns.map(csvCell).join(","), ...displayRows.map((row) => columns.map((column) => csvCell(row[column])).join(","))].join("\n");
+  return [columns.map(column => csvCell(column, true)).join(","), ...displayRows.map((row) => columns.map((column) => csvCell(row[column])).join(","))].join("\n");
 }
 
 export function parseCsv(text: string): { columns: string[]; rows: Record<string, string>[] } {

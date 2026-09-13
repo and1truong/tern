@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import { parseCsv, serializeRows } from "./dataTransfer.ts";
 import type { DbTable } from "../shared.ts";
+import { coerceCellValue } from "./dataGrid.ts";
 import { encodeDbValue } from "../binaryValues.ts";
 
 const table: DbTable = { name: "users", schema: "public", type: "table", columns: [], rowCount: -1, ddl: "" };
 
 test("exports result sets as CSV, JSON, Markdown, and executable INSERTs", () => {
   const rows = [{ id: 1, name: "Ada, Inc.", note: null }];
-  expect(serializeRows("csv", ["id", "name", "note"], rows)).toBe('id,name,note\n1,"Ada, Inc.",');
+  expect(serializeRows("csv", ["id", "name", "note"], rows)).toBe('id,name,note\n1,"Ada, Inc.",\\N');
   expect(serializeRows("json", ["id", "name", "note"], rows)).toContain('"name": "Ada, Inc."');
   expect(serializeRows("markdown", ["id", "name"], rows)).toContain("| 1 | Ada, Inc. |");
   expect(serializeRows("sql", ["id", "name", "note"], rows, table)).toBe('INSERT INTO "public"."users" ("id", "name", "note") VALUES (1, \'Ada, Inc.\', NULL);\n');
@@ -86,4 +87,22 @@ test("CSV rejects text after closing quotes", () => {
 test("Markdown preserves structured JSON and arrays before escaping", () => {
   expect(serializeRows("markdown", ["json", "array"], [{ json: { message: "a|b" }, array: [1, { ok: true }] }]))
     .toContain('| {"message":"a\\|b"} | [1,{"ok":true}] |');
+});
+
+test("CSV round-trips nulls, empty strings and leading backslashes", () => {
+  const values = [null, "", "\\N", "\\\\N", "\\path"];
+  for (const value of values) {
+    const parsed = parseCsv(serializeRows("csv", ["value"], [{ value }]));
+    expect(parsed.rows).toHaveLength(1);
+    expect(coerceCellValue(parsed.rows[0].value!, "text")).toBe(value);
+  }
+});
+
+test("exports nonfinite numbers without replacing them with NULL", () => {
+  const rows = [{ n: encodeDbValue(Infinity) }, { n: encodeDbValue(-Infinity) }];
+  expect(serializeRows("sql", ["n"], rows, { ...table, schema: undefined })).toContain("VALUES (1e999)");
+  expect(serializeRows("sql", ["n"], rows, { ...table, schema: undefined })).toContain("VALUES (-1e999)");
+  expect(serializeRows("sql", ["n"], rows, table)).toContain("VALUES ('Infinity')");
+  expect(serializeRows("csv", ["n"], rows)).toBe("n\nInfinity\n-Infinity");
+  expect(JSON.parse(serializeRows("json", ["n"], rows))).toEqual([{ n: "Infinity" }, { n: "-Infinity" }]);
 });
