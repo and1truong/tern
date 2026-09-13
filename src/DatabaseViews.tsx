@@ -318,7 +318,8 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
                       className={"px-2 py-1 border-b border-[var(--border)] mono text-[var(--text)] align-top " + (isNum ? "text-right " : "") + (stagedKey in edits ? "bg-[var(--accent)]/10 " : "") + (canEditCell ? "cursor-text" : "")}>
                       {editing === stagedKey ? (
                         <input autoFocus aria-label={`Edit row ${result.offset + i + 1} ${c}`}
-                          defaultValue={isNull ? "NULL" : String(value)}
+                          title={"Use \\N for SQL NULL; double a leading backslash for literal text."}
+                          defaultValue={isNull ? "\\N" : String(value).replace(/^\\/, "\\\\")}
                           onKeyDown={(event) => {
                             if (event.key === "Escape") { cancelEdit.current = true; setEditing(null); }
                             if (event.key === "Enter") event.currentTarget.blur();
@@ -430,7 +431,7 @@ function InsertRowModal({ table, onClose, onAdd }: {
               </span>
             </label>
           ))}
-          <span className="text-[10px] text-[var(--faint)]">Uncheck default to insert an explicit value, including an empty string; generated and identity columns are filled by the database.</span>
+          <span className="text-[10px] text-[var(--faint)]">Use \N for SQL NULL; double a leading backslash for literal text. Uncheck default to insert an explicit value, including an empty string; generated and identity columns are filled by the database.</span>
         </div>
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border)]">
           <button onClick={onClose} className="px-3 py-1.5 text-xs font-semibold text-[var(--muted)]">Cancel</button>
@@ -483,7 +484,7 @@ function ImportCsvModal({ table, onClose, onStage }: {
             placeholder={`id,name\n1,Ada`} className="mono h-48 resize-y rounded-md border border-[var(--border-2)] bg-[var(--bg)] p-2 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)]" />
           {preview && <div className="text-xs text-[var(--muted)]">{preview.rows.length} row(s) · columns: {preview.columns.join(", ")}</div>}
           {(error ?? previewError) && <Notice variant="error" layout="inline" className="text-xs px-2 py-1">{error ?? previewError}</Notice>}
-          <span className="text-[10px] text-[var(--faint)]">The header maps by column name. Imported rows are staged for SQL review and one atomic transaction.</span>
+          <span className="text-[10px] text-[var(--faint)]">The header maps by column name. Use \N for SQL NULL; double a leading backslash for literal text. Imported rows are staged for SQL review and one atomic transaction.</span>
         </div>
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border)]">
           <button onClick={onClose} className="px-3 py-1.5 text-xs font-semibold text-[var(--muted)]">Cancel</button>

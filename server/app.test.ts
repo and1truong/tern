@@ -1,10 +1,27 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAppDatabase } from "./appDatabase.ts";
 import { makeApp } from "./app.ts";
+
+test("application database remains protected when configured through a symlink", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tern-app-links-')));
+  const path = join(dir, 'app.sqlite');
+  const alias = join(dir, 'alias.sqlite');
+  const db = openAppDatabase(path);
+  symlinkSync(path, alias);
+  const app = makeApp(db, { appPath: alias });
+  try {
+    for (const candidate of [path, alias]) {
+      const response = await app(new Request('http://localhost/api/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: candidate }) }));
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain('application database');
+    }
+    expect(db.query('SELECT * FROM recent_files').all()).toEqual([]);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("standalone API persists state and recent files, denies implicit access/writes, and gates migration apply", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tern-app-')));

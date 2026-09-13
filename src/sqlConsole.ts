@@ -170,6 +170,14 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
     return argument !== -1 && !["TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_XINFO", "INDEX_LIST", "FOREIGN_KEY_LIST", "INTEGRITY_CHECK", "QUICK_CHECK", "FOREIGN_KEY_CHECK"].includes(words[argument - 1]);
   }
   if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0])) return true;
+  if (dialect === "postgres" && ["SELECT", "WITH"].includes(words[0])) {
+    let depth = 0;
+    for (const word of words) {
+      if (word === "(") depth++;
+      if (word === ")") depth--;
+      if (depth === 0 && word === "INTO") return true;
+    }
+  }
   if (words[0] !== "WITH") return false;
   let depth = 0;
   for (let i = 1; i < words.length; i++) {

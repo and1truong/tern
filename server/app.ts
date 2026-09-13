@@ -1,10 +1,12 @@
 import type { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
 import { makeConnections, type SecretStore } from "./connections.ts";
 import { makeHandlers } from "./routeHandlers.ts";
 import { recentFiles, sqlitePath } from "./appDatabase.ts";
 import { readSchema } from "./dbServer.ts";
 
 export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?: string } = {}) {
+  const appFile = options.appPath ? statSync(options.appPath, { bigint: true }) : null;
   const connections = makeConnections(db, options.secrets);
   const writable = new Set<string>();
   const opened = new Set<string>();
@@ -44,7 +46,10 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
       }
       if (path === "/open" && req.method === "POST") {
         const path = sqlitePath((await req.json()).path);
-        if (options.appPath && path === options.appPath) return fail("The application database cannot be opened as a user connection");
+        if (appFile) {
+          const file = statSync(path, { bigint: true });
+          if (file.dev === appFile.dev && file.ino === appFile.ino) return fail("The application database cannot be opened as a user connection");
+        }
         readSchema(path);
         opened.add(path);
         db.query("INSERT INTO recent_files VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET opened_at = excluded.opened_at").run(path, Date.now());

@@ -50,7 +50,8 @@ export function rowsToCsv(columns: string[], rows: Record<string, unknown>[]): s
 
 export function coerceCellValue(raw: string, type: string): unknown {
   const value = raw.trim();
-  if (value.toUpperCase() === "NULL") return null;
+  if (raw === "\\N") return null;
+  if (raw.startsWith("\\\\")) return raw.slice(1);
   if (/\b(DECIMAL|NUMERIC)\b/i.test(type) && value !== "") return value;
   if (/\b(INT|INTEGER|BIGINT|SMALLINT|INT8|SERIAL|BIGSERIAL)\b/i.test(type) && /^[-+]?\d+$/.test(value)) {
     const number = Number(value);

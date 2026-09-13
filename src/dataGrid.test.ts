@@ -58,7 +58,10 @@ describe("staged row changes", () => {
   });
 
   test("coerces explicit NULL, numeric, and boolean values", () => {
-    expect(coerceCellValue("NULL", "text")).toBeNull();
+    expect(coerceCellValue("NULL", "text")).toBe("NULL");
+    expect(coerceCellValue("null", "text")).toBe("null");
+    expect(coerceCellValue("\\N", "text")).toBeNull();
+    expect(coerceCellValue("\\\\N", "text")).toBe("\\N");
     expect(coerceCellValue("42", "INTEGER")).toBe(42);
     expect(coerceCellValue("9007199254740993", "BIGINT")).toBe("9007199254740993");
     expect(coerceCellValue("12345678901234567890.12345", "NUMERIC(30, 5)")).toBe("12345678901234567890.12345");

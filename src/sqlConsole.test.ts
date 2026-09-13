@@ -117,3 +117,11 @@ test("comment-only fragments never execute, including trailing cursor comments",
 test("WITH-prefixed SQLite REPLACE uses the write route", () => {
   expect(isWriteSql("WITH x AS (SELECT 2) REPLACE INTO t SELECT * FROM x", "sqlite")).toBe(true);
 });
+
+test("PostgreSQL SELECT INTO uses writable execution including CTE and EXPLAIN", () => {
+  for (const sql of ["SELECT * INTO archive FROM users", "WITH x AS (SELECT 1) SELECT * INTO archive FROM x", "EXPLAIN ANALYZE SELECT * INTO archive FROM users"]) {
+    expect(isWriteSql(sql, "postgres")).toBe(true);
+  }
+  expect(isWriteSql('SELECT "INTO", \'INTO\' FROM users /* INTO */', "postgres")).toBe(false);
+  expect(isWriteSql("SELECT (SELECT 1 AS x) FROM users", "postgres")).toBe(false);
+});
