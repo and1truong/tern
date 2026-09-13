@@ -30,8 +30,11 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await expect(page.getByRole('cell', { name: 'User 001', exact: true })).toBeVisible();
   });
   await test.step('Staging does not write; reviewed transaction commits', async () => {
-    page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Read Only', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Enable writes?' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Read Only', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Read Only', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Enable writes?' }).getByRole('button', { name: 'Enable writes', exact: true }).click();
     await expect(page.getByRole('button', { name: '● Writable', exact: true })).toBeVisible();
     await page.getByRole('cell', { name: 'User 001', exact: true }).dblclick();
     await page.getByLabel('Edit row 1 name', { exact: true }).fill('Edited by Playwright');

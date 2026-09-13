@@ -23,6 +23,10 @@ export function App() {
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const initializedAccess = useRef(new Set<string>());
   const [writable, setWritable] = useState<Record<string, boolean>>({});
+  const [accessTarget, setAccessTarget] = useState<DbSource | null>(null);
+  const [accessBusy, setAccessBusy] = useState(false);
+  const accessDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (accessTarget) accessDialog.current?.showModal(); }, [accessTarget]);
   const [latency, setLatency] = useState(0);
   const [error, setError] = useState('');
   const [picker, setPicker] = useState<false | 'sqlite' | 'postgres'>(false);
@@ -88,11 +92,19 @@ export function App() {
     setTabs(prev => prev.filter(t => t.id !== doc.id));
     if (active === doc.id) setActive(tabs.find(t => t.id !== doc.id)?.id ?? '');
   };
-  const toggleAccess = async () => {
-    if (!source) return;
-    if (!writable[id] && !window.confirm(`Enable writes to ${sourceLabel(source)}${source.kind === 'postgres' && source.environment === 'production' ? ' (PRODUCTION)' : ''}?`)) return;
-    try { await dbApi.access(source, !writable[id]); setWritable(s => ({ ...s, [id]: !s[id] })); }
-    catch (e) { setError(String(e)); }
+  const changeAccess = async (target: DbSource, enabled: boolean) => {
+    setAccessBusy(true); setError('');
+    try {
+      await dbApi.access(target, enabled);
+      setWritable(s => ({ ...s, [sourceId(target)]: enabled }));
+      setAccessTarget(null);
+    } catch (e) { setError(String(e)); }
+    finally { setAccessBusy(false); }
+  };
+  const toggleAccess = () => {
+    if (!source || accessBusy) return;
+    if (writable[id]) void changeAccess(source, false);
+    else { setError(''); setAccessTarget(source); }
   };
   const actions = useRef({ open, close, current }); actions.current = { open, close, current };
   useEffect(() => {
@@ -138,6 +150,21 @@ export function App() {
         {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={setDirty} onLatency={setLatency} onRefresh={() => void connect(doc.source)} />)}
       </section>
     </div>
+    {accessTarget && <dialog ref={accessDialog} aria-labelledby="access-title" className="connection-dialog" onCancel={event => { if (accessBusy) event.preventDefault(); else setAccessTarget(null); }}>
+      <form onSubmit={event => { event.preventDefault(); void changeAccess(accessTarget, true); }}>
+        <header className="toolbar"><b id="access-title">Enable writes?</b></header>
+        <div className="form-fields">
+          <p>Allow changes to {sourceLabel(accessTarget)}?</p>
+          {accessTarget.kind === 'postgres' && accessTarget.environment === 'production' && <p className="error">This is a PRODUCTION connection.</p>}
+          <p>Row changes still require review and Apply transaction.</p>
+          {error && <div role="alert" className="error">{error}</div>}
+        </div>
+        <footer className="toolbar justify-end">
+          <button type="button" autoFocus disabled={accessBusy} onClick={() => setAccessTarget(null)}>Cancel</button>
+          <button className="primary" disabled={accessBusy}>{accessBusy ? 'Enabling…' : 'Enable writes'}</button>
+        </footer>
+      </form>
+    </dialog>}
     <footer className="statusbar"><span>{source?.kind === 'postgres' ? `PostgreSQL ${schemas[id]?.pragmas.server_version ?? ''}` : source ? `SQLite ${schemas[id]?.pragmas.sqlite_version ?? ''}` : 'DBM'}</span><span>{source?.kind === 'postgres' ? new URL(source.url).host : source?.path ?? 'No database open'}</span><span>{source?.kind === "postgres" ? source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1)) : ""}</span><span className="ml-auto">{states[id] ?? 'Ready'}</span><span className={writable[id] ? 'production' : ''}>{writable[id] ? 'Writable' : 'Read Only'}</span><span>{latency.toFixed(1)} ms</span></footer>
     {createView && source && <DatabaseCreateViewModal source={source} onClose={() => setCreateView(false)} onCreated={() => void connect(source)}/>}
     {picker && <DatabaseOpenModal initial={picker} onClose={() => setPicker(false)} onOpen={s => { setPicker(false); setSelected(s); setActive(''); void connect(s); void refreshConnections(); }}/ >}
