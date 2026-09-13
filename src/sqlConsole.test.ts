@@ -57,3 +57,8 @@ test('SQLite trigger bodies stay intact for Run and Run all', () => {
   expect(splitSqlStatements(script).map(s => s.sql)).toEqual([trigger, 'SELECT 1']);
   expect(sqlToRun(script, { from: script.indexOf('INSERT INTO logs'), to: script.indexOf('INSERT INTO logs') }, false)).toEqual([trigger]);
 });
+
+test('non-read operations use writable execution without a verb allowlist', () => {
+  for (const sql of ['ANALYZE users', 'CLUSTER users', 'REFRESH MATERIALIZED VIEW summary', 'SET search_path TO public', 'REASSIGN OWNED BY old TO new']) expect(isWriteSql(sql)).toBe(true);
+  for (const sql of ['SHOW search_path', 'SELECT analyze FROM users', 'VALUES (1)', '-- empty']) expect(isWriteSql(sql)).toBe(false);
+});

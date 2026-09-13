@@ -55,11 +55,25 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await expect(page.getByRole('dialog', { name: 'Review row changes' })).toBeHidden();
     expect(sql('SELECT name FROM verify.users WHERE id=1')).toBe('Edited by Playwright');
   });
+  await test.step('Insert distinguishes explicit empty text from database default', async () => {
+    for (const id of [126, 127]) {
+      await page.getByRole('button', { name: 'Add row', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Add row', exact: true });
+      await dialog.getByLabel('New id', { exact: true }).fill(String(id));
+      await dialog.getByLabel('New email', { exact: true }).fill(`user${id}@example.test`);
+      if (id === 126) await dialog.getByLabel('Use default for name', { exact: true }).uncheck();
+      await dialog.getByRole('button', { name: 'Stage row', exact: true }).click();
+      await page.getByRole('button', { name: 'Review 1 change', exact: true }).click();
+      await page.getByRole('button', { name: 'Apply transaction', exact: true }).click();
+      await expect(page.getByRole('dialog', { name: 'Review row changes' })).toBeHidden();
+      expect(sql(`SELECT name FROM verify.users WHERE id=${id}`)).toBe(id === 126 ? '' : 'Default user');
+    }
+  });
   await test.step('Execute SQL against PostgreSQL', async () => {
     await page.getByRole('button', { name: 'SQL', exact: true }).click();
     await page.locator('.cm-content[contenteditable=true]:visible').pressSequentially('SELECT count(*) AS verified_users FROM verify.users;');
     await page.getByRole('button', { name: 'Run', exact: true }).click();
-    await expect(page.getByRole('cell', { name: '125', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '127', exact: true })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Query 1', exact: true })).toBeVisible();
   });
   await test.step('Migration dry-run rolls back; explicit apply commits', async () => {

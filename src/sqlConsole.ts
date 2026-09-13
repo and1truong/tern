@@ -1,10 +1,5 @@
 export interface SqlSelection { from: number; to: number }
 
-const WRITE_VERBS = new Set([
-  "CALL", "DO", "COMMENT", "ALTER", "ATTACH", "CREATE", "DELETE", "DETACH", "DROP", "GRANT", "INSERT",
-  "MERGE", "REINDEX", "REPLACE", "REVOKE", "TRUNCATE", "UPDATE", "VACUUM",
-]);
-
 function structuralWords(sql: string): string[] {
   const words: string[] = [];
   let quote: "'" | '"' | "`" | null = null;
@@ -117,7 +112,8 @@ export function firstSqlVerb(sql: string): string {
 
 export function isWriteSql(sql: string): boolean {
   const words = structuralWords(sql);
-  if (WRITE_VERBS.has(words[0])) return true;
+  if (!words.length) return false;
+  if (!["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"].includes(words[0])) return true;
   if (words[0] !== "WITH") return false;
   let depth = 0;
   for (let i = 1; i < words.length; i++) {

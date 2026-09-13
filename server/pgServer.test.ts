@@ -82,6 +82,25 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("DDL preserves default, serial, identity and generated behavior", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_defaults_test');
+    try {
+      await runPgExec(url, `CREATE TABLE pgserver_defaults_test.original (
+        id integer GENERATED ALWAYS AS IDENTITY (START WITH 10 INCREMENT BY 2),
+        serial_id serial, amount integer DEFAULT 7,
+        doubled integer GENERATED ALWAYS AS (amount * 2) STORED
+      )`);
+      const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_defaults_test' && t.name === 'original')!;
+      await runPgExec(url, table.ddl!.replace('"original"', '"copy"'));
+      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.copy DEFAULT VALUES');
+      await runPgExec(url, 'INSERT INTO pgserver_defaults_test.copy DEFAULT VALUES');
+      expect((await runPgQuery(url, 'SELECT * FROM pgserver_defaults_test.copy ORDER BY id', [])).rows).toEqual([
+        { id: 10, serial_id: 1, amount: 7, doubled: 14 },
+        { id: 12, serial_id: 2, amount: 7, doubled: 14 },
+      ]);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_defaults_test CASCADE'); }
+  });
+
   test("SHOW returns named read-only results with paging", async () => {
     const path = await runPgQuery(url, '/* inspect */ SHOW search_path', []);
     expect(path.columns).toEqual(['search_path']);

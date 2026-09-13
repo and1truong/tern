@@ -401,7 +401,7 @@ function InsertRowModal({ table, onClose, onAdd }: {
     const row: Record<string, unknown> = {};
     for (const column of writableColumns) {
       const raw = values[column.name];
-      if (raw !== undefined && raw !== "") row[column.name] = coerceCellValue(raw, column.type);
+      if (raw !== undefined) row[column.name] = coerceCellValue(raw, column.type);
     }
     onAdd(row);
   };
@@ -418,11 +418,19 @@ function InsertRowModal({ table, onClose, onAdd }: {
               <span className="truncate text-[var(--muted)]" title={column.name}>{column.name}</span>
               <input aria-label={`New ${column.name}`} value={values[column.name] ?? ""}
                 onChange={(event) => setValues((current) => ({ ...current, [column.name]: event.target.value }))}
-                placeholder={column.notNull ? column.type : `${column.type || "value"} · blank = default`}
+                placeholder={column.type || "value"}
                 className="mono min-w-0 rounded-md border border-[var(--border-2)] bg-[var(--bg)] px-2 py-1.5 text-[var(--text)] outline-none focus:border-[var(--accent)]" />
+              <span className="col-span-2 flex items-center gap-2">
+                <input type="checkbox" aria-label={`Use default for ${column.name}`} checked={values[column.name] === undefined}
+                  onChange={event => setValues(current => {
+                    const next = { ...current };
+                    if (event.target.checked) delete next[column.name]; else next[column.name] = "";
+                    return next;
+                  })} />Use database default
+              </span>
             </label>
           ))}
-          <span className="text-[10px] text-[var(--faint)]">Leave blank to use the database default; generated and identity columns are filled by the database.</span>
+          <span className="text-[10px] text-[var(--faint)]">Uncheck default to insert an explicit value, including an empty string; generated and identity columns are filled by the database.</span>
         </div>
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border)]">
           <button onClick={onClose} className="px-3 py-1.5 text-xs font-semibold text-[var(--muted)]">Cancel</button>
