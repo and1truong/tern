@@ -368,33 +368,6 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       table.uniqueKeys = [...uniqueGroups.entries()].filter(([key]) => key.startsWith(prefix)).map(([, columns]) => columns);
     }
     // Synthesize a minimal CREATE statement per table for the Structure pane's
-    // DDL block (Postgres has no sqlite_master.sql equivalent).
-    for (const t of tables) {
-      if (t.type === "materialized_view") {
-        t.ddl = materializedDdl.get(`${t.schema}.${t.name}`) ?? "";
-        continue;
-      }
-      if (t.type === "view") {
-        t.ddl = viewDdl.get(`${t.schema}.${t.name}`) ?? "";
-        continue;
-      }
-      const primaryColumns = keys.filter(row => row.table_schema === t.schema && row.table_name === t.name && row.constraint_type === 'PRIMARY KEY').map(row => String(row.column_name));
-      const definitions = t.columns.map(c => {
-        const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
-        const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')
-          ? ({ smallint: 'smallserial', integer: 'serial', bigint: 'bigserial' } as Record<string, string>)[c.type] : undefined;
-        const generation = serialType ? '' : c.identity
-          ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment})`
-          : c.generated ? ` GENERATED ALWAYS AS (${metadata.generation_expression}) STORED`
-          : c.defaultValue != null ? ` DEFAULT ${c.defaultValue}` : '';
-        return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${generation}${c.notNull ? " NOT NULL" : ""}`;
-      });
-      if (primaryColumns.length) definitions.push(`  PRIMARY KEY (${primaryColumns.map(name => `"${name.replace(/"/g, '""')}"`).join(', ')})`);
-      const body = definitions.join(",\n");
-      const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
-      t.ddl = `CREATE TABLE ${relation} (\n${body}\n);`;
-    }
-
     const idx = await db.unsafe(
       `SELECT schemaname AS schema, tablename AS table_name, indexname AS name, indexdef AS sql
          FROM pg_indexes
@@ -436,6 +409,34 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       name: String(row.name), schema: String(row.schema), table: String(row.table_name), type: String(row.type),
       columns: Array.isArray(row.columns) ? row.columns.map(String) : [], definition: String(row.definition ?? ""),
     }));
+
+    // DDL block (Postgres has no sqlite_master.sql equivalent).
+    for (const t of tables) {
+      if (t.type === "materialized_view") {
+        t.ddl = materializedDdl.get(`${t.schema}.${t.name}`) ?? "";
+        continue;
+      }
+      if (t.type === "view") {
+        t.ddl = viewDdl.get(`${t.schema}.${t.name}`) ?? "";
+        continue;
+      }
+      const definitions = t.columns.map(c => {
+        const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name && row.column_name === c.name)!;
+        const serialType = !c.identity && metadata.owned_sequence && c.defaultValue?.startsWith('nextval(')
+          ? ({ smallint: 'smallserial', integer: 'serial', bigint: 'bigserial' } as Record<string, string>)[c.type] : undefined;
+        const generation = serialType ? '' : c.identity
+          ? ` GENERATED ${metadata.identity_generation} AS IDENTITY (START WITH ${metadata.identity_start} INCREMENT BY ${metadata.identity_increment})`
+          : c.generated ? ` GENERATED ALWAYS AS (${metadata.generation_expression}) STORED`
+          : c.defaultValue != null ? ` DEFAULT ${c.defaultValue}` : '';
+        return `  "${c.name.replace(/"/g, '""')}" ${serialType ?? c.type}${generation}${c.notNull ? " NOT NULL" : ""}`;
+      });
+      for (const constraint of constraints.filter(c => c.schema === t.schema && c.table === t.name)) {
+        definitions.push(`  ${constraint.definition}`);
+      }
+      const body = definitions.join(",\n");
+      const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
+      t.ddl = `CREATE TABLE ${relation} (\n${body}\n);`;
+    }
 
     const sequenceRows = await db.unsafe(
       `SELECT sequence_schema AS schema, sequence_name AS name, data_type,

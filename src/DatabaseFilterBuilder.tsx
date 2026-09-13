@@ -23,7 +23,7 @@ function GroupView({ group, cols, dialect, depth, onChange, onRemove }: {
     onChange({ ...group, rules: group.rules.map((r) => (r.id === id ? next : r)) });
   const removeChild = (id: string) =>
     onChange({ ...group, rules: group.rules.filter((r) => r.id !== id) });
-  const addRule = () => onChange({ ...group, rules: [...group.rules, newRule(cols)] });
+  const addRule = () => onChange({ ...group, rules: [...group.rules, newRule(cols, dialect)] });
   const addGroup = () => onChange({ ...group, rules: [...group.rules, newGroup()] });
 
   return (
@@ -85,7 +85,7 @@ function RuleView({ rule, cols, dialect, onChange, onRemove }: {
   // Changing the column resets the op to that type's default and clears the value,
   // so a stale numeric op never runs against a text column (or vice versa).
   const setCol = (idx: number) =>
-    onChange({ ...rule, col: idx, op: defaultOp(cols[idx]?.type ?? "TEXT"), value: "" });
+    onChange({ ...rule, col: idx, op: defaultOp(cols[idx]?.type ?? "TEXT", dialect), value: "" });
 
   return (
     <div className="flex items-center gap-1.5 text-xs">

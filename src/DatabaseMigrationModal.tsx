@@ -40,6 +40,7 @@ export function DatabaseMigrationModal({ source, onClose, onApplied, writable = 
           <span className="ml-auto">{writable ? "Writable" : "Read Only"}</span>
         </div>
         <div className="overflow-auto p-4 grid gap-3">
+          {source.kind === 'postgres' && <Notice variant="warning" layout="inline" className="px-2 py-1 text-xs">PostgreSQL dry runs require Writable. Sequence changes (nextval/setval) and external side effects are not undone by rollback. Use a disposable database when these effects are unacceptable.</Notice>}
           {production && <Notice variant="warning" layout="inline" className="px-2 py-1 text-xs">This migration targets a production profile.</Notice>}
           <textarea aria-label="Migration SQL" disabled={busy} value={sql} onChange={(event) => { setSql(event.target.value); onDirty?.(!!event.target.value); setPreview(null); setError(null); }}
             spellCheck={false} placeholder={'CREATE TABLE example (\n  id INTEGER PRIMARY KEY\n);'}
@@ -51,7 +52,7 @@ export function DatabaseMigrationModal({ source, onClose, onApplied, writable = 
         </div>
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border)]">
           <button onClick={() => { setSql(""); setPreview(null); onDirty?.(false); onClose(); }} disabled={busy} className="px-3 py-1.5 text-xs font-semibold text-[var(--muted)]">Revert</button>
-          <button onClick={() => void validate()} disabled={busy || !sql.trim()} className="px-3 py-1.5 rounded-md border border-[var(--border-2)] text-xs font-semibold text-[var(--muted)] disabled:opacity-40">{busy && !preview ? "Validating…" : "Dry run"}</button>
+          <button onClick={() => void validate()} disabled={busy || !sql.trim() || (source.kind === "postgres" && !writable)} className="px-3 py-1.5 rounded-md border border-[var(--border-2)] text-xs font-semibold text-[var(--muted)] disabled:opacity-40">{busy && !preview ? "Validating…" : "Dry run"}</button>
           <button onClick={() => void apply()} disabled={busy || !preview || !writable} className="px-3 py-1.5 rounded-md bg-[var(--red)] text-white text-xs font-bold disabled:opacity-40">Apply migration</button>
         </div>
       </div>

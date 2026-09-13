@@ -88,7 +88,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
         if (path === "/insights") return h.insights(url);
       }
       if (req.method !== "POST") return fail("Not found", 404);
-      if (["/exec", "/rows/apply", "/migration/apply"].includes(path) && !writable.has(accessKey)) return fail("Connection is read-only", 403);
+      if ((["/exec", "/rows/apply", "/migration/apply"].includes(path) || (path === "/migration/preview" && body.connId)) && !writable.has(accessKey)) return fail("Connection is read-only", 403);
       const forwarded = new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body), signal: req.signal });
       if (path === "/migration/preview") {
         validated.delete(accessKey);

@@ -103,6 +103,24 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SCHEMA pgserver_defaults_test CASCADE'); }
   });
 
+  test("DDL replay enforces unique, foreign key, check and exclusion constraints", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_constraints_test');
+    try {
+      await runPgExec(url, 'CREATE TABLE pgserver_constraints_test.parent (id integer PRIMARY KEY)');
+      await runPgExec(url, `CREATE TABLE pgserver_constraints_test.original (
+        id integer PRIMARY KEY, code text UNIQUE, parent_id integer REFERENCES pgserver_constraints_test.parent(id),
+        amount integer CHECK (amount > 0), span int4range, EXCLUDE USING gist (span WITH &&)
+      )`);
+      const table = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_constraints_test' && t.name === 'original')!;
+      await runPgExec(url, table.ddl!.replace('"original"', '"copy"'));
+      await runPgExec(url, 'INSERT INTO pgserver_constraints_test.parent VALUES (1)');
+      await runPgExec(url, "INSERT INTO pgserver_constraints_test.copy VALUES (1, 'one', 1, 1, '[1,5)')");
+      for (const values of ["(2, 'one', 1, 1, '[6,9)')", "(2, 'two', 99, 1, '[6,9)')", "(2, 'two', 1, -1, '[6,9)')", "(2, 'two', 1, 1, '[2,6)')"]) {
+        await expect(runPgExec(url, `INSERT INTO pgserver_constraints_test.copy VALUES ${values}`)).rejects.toThrow();
+      }
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_constraints_test CASCADE'); }
+  });
+
   test("SHOW returns named read-only results with paging", async () => {
     const path = await runPgQuery(url, '/* inspect */ SHOW search_path', []);
     expect(path.columns).toEqual(['search_path']);
@@ -161,7 +179,7 @@ pgDescribe("pgServer (live)", () => {
       await runPgExec(url, 'CREATE TABLE pgserver_ddl_test.original (a integer, b integer, PRIMARY KEY (b, a))');
       const schema = await readPgSchema(url);
       const ddl = schema.tables.find(t => t.schema === 'pgserver_ddl_test' && t.name === 'original')!.ddl!;
-      expect(ddl).toContain('PRIMARY KEY ("b", "a")');
+      expect(ddl).toContain('PRIMARY KEY (b, a)');
       await runPgExec(url, ddl.replace('"original"', '"copy"'));
     } finally { await runPgExec(url, 'DROP SCHEMA pgserver_ddl_test CASCADE'); }
   });

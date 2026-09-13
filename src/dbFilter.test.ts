@@ -111,3 +111,13 @@ test('numeric parameters retain precision and reject non-numeric syntax', () => 
     expect(() => compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value }] }, numericColumns)).toThrow('not a number');
   }
 });
+
+test('PostgreSQL nontext scalars default to equality and legacy text rules cast explicitly', () => {
+  for (const type of ['uuid', 'boolean', 'date', 'timestamp without time zone']) {
+    expect(defaultOp(type, 'postgres')).toBe('equals');
+    expect(opsFor(type, 'postgres').some(op => op.v === 'contains')).toBe(false);
+    const columns: DbColumn[] = [{ name: 'value', type, notNull: false, pk: false, fk: null }];
+    expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'contains', value: 'a' }] }, columns, 'postgres').where).toBe('(CAST("value" AS text) LIKE ?)');
+  }
+  expect(defaultOp('text', 'postgres')).toBe('contains');
+});

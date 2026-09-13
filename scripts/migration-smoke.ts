@@ -37,6 +37,7 @@ async function exercise(width: number) {
     source: { kind: "postgres", connId: "prod", label: "Prod", url: "postgres://prod/app", environment: "production", readOnly: false },
     writable: true, onClose: () => { closed++; }, onApplied: () => { applied++; },
   })));
+  if (!container.textContent?.includes("not undone by rollback")) fail(`${width}px: sequence warning is missing`);
   if (!container.textContent?.includes("targets a production profile")) fail(`${width}px: production migration warning is missing`);
   const textarea = container.querySelector('[aria-label="Migration SQL"]') as HTMLTextAreaElement | null;
   if (!textarea) fail(`${width}px: migration editor is missing`);

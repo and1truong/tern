@@ -9,6 +9,7 @@ test.skipIf(!url)('standalone PostgreSQL profile, database selection, read-only,
   const post = (route: string, body: unknown, signal?: AbortSignal) => app(new Request(`http://localhost/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal }));
   const profile = await (await post('connections', { label: 'Integration', url, readOnly: true })).json();
   expect(profile.id).toBeTruthy();
+  expect((await post('migration/preview', { connId: profile.id, sql: "SELECT setval('missing_sequence', 1)" })).status).toBe(403);
   const prefer = new URL(url!); prefer.searchParams.set('sslmode', 'prefer');
   expect((await post('connections/test', { url: prefer.toString() })).ok).toBe(true);
   const source = { connId: profile.id, database: decodeURIComponent(new URL(url!).pathname.slice(1)) };
@@ -19,6 +20,16 @@ test.skipIf(!url)('standalone PostgreSQL profile, database selection, read-only,
     expect((await app(new Request(`http://localhost/api/schema?${query}`))).ok).toBe(true);
     expect((await post('exec', { ...source, sql: 'CREATE TABLE dbm_api_test(id int primary key, name text)', allowWrite: true })).status).toBe(403);
     await post('access', { ...source, writable: true });
+    await post('exec', { ...source, sql: 'CREATE SEQUENCE dbm_preview_guard_seq', allowWrite: true });
+    try {
+      await post('access', { ...source, writable: false });
+      expect((await post('migration/preview', { ...source, sql: "SELECT setval('dbm_preview_guard_seq', 99)" })).status).toBe(403);
+      const sequence = await (await post('query', { ...source, sql: 'SELECT last_value::text FROM dbm_preview_guard_seq' })).json();
+      expect(sequence.rows[0].last_value).toBe('1');
+    } finally {
+      await post('access', { ...source, writable: true });
+      await post('exec', { ...source, sql: 'DROP SEQUENCE dbm_preview_guard_seq', allowWrite: true });
+    }
     await post('exec', { ...source, sql: 'DROP TABLE IF EXISTS dbm_api_test', allowWrite: true });
     const migration = { ...source, sql: 'CREATE TABLE dbm_api_test(id int primary key, name text)', allowWrite: true };
     expect((await post('migration/preview', migration)).ok).toBe(true);
