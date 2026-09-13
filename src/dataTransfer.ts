@@ -10,11 +10,15 @@ function csvCell(value: unknown): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-function sqlValue(value: unknown, postgres: boolean): string {
+function sqlValue(value: unknown, postgres: boolean, type = ""): string {
   if (isDbBinaryValue(value)) {
     const bytes = decodeDbValue(value) as Uint8Array;
     const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
     return postgres ? `decode('${hex}', 'hex')` : `X'${hex}'`;
+  }
+  if (postgres && Array.isArray(value) && (type === "ARRAY" || type.endsWith("[]"))) {
+    const arrayLiteral = (items: unknown[]): string => '{' + items.map(item => Array.isArray(item) ? arrayLiteral(item) : item == null ? 'NULL' : '"' + (typeof item === 'object' ? JSON.stringify(item) : String(item)).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + '}';
+    return "'" + arrayLiteral(value).replace(/'/g, "''") + "'";
   }
   value = unwrapDbValueForDisplay(value);
   if (value == null) return "NULL";
@@ -44,7 +48,7 @@ export function serializeRows(format: ExportFormat, columns: string[], rows: Rec
       return rows.map(() => `INSERT INTO ${tableSql(table)} DEFAULT VALUES;`).join("\n") + "\n";
     }
     const names = writableColumns.map((column) => `"${column.replace(/"/g, '""')}"`).join(", ");
-    return rows.map((row) => `INSERT INTO ${tableSql(table)} (${names}) VALUES (${writableColumns.map((column) => sqlValue(row[column], !!table.schema)).join(", ")});`).join("\n") + "\n";
+    return rows.map((row) => `INSERT INTO ${tableSql(table)} (${names}) VALUES (${writableColumns.map((column) => sqlValue(row[column], !!table.schema, table.columns.find(c => c.name === column)?.type)).join(", ")});`).join("\n") + "\n";
   }
   return [columns.map(csvCell).join(","), ...displayRows.map((row) => columns.map((column) => csvCell(row[column])).join(","))].join("\n");
 }

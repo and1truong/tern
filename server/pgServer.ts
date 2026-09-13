@@ -56,16 +56,6 @@ async function controlledPg<T>(url: string, connection: Awaited<ReturnType<SQL['
   finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); await cancellation; }
 }
 
-// Bun resolves the result of a query to an array of row objects. It also tags
-// that array with metadata (.count for affected rows, .columns for the column
-// order). Neither is part of the documented public type, so read them
-// defensively and fall back to deriving columns from the first row's keys —
-// the same fallback dbServer/routes already use for SQLite.
-function columnsOf(rows: Record<string, unknown>[]): string[] {
-  const meta = (rows as unknown as { columns?: { name: string }[] }).columns;
-  if (Array.isArray(meta) && meta.length) return meta.map((c) => c.name);
-  return rows.length ? Object.keys(rows[0]) : [];
-}
 function affectedOf(rows: unknown[]): number {
   const n = (rows as unknown as { count?: number }).count;
   return typeof n === "number" ? n : 0;
@@ -514,17 +504,33 @@ export async function runPgQuery(
     inTransaction = true;
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
     const t0 = performance.now();
-    let rows: Record<string, unknown>[];
+    let rows: unknown[][];
+    const explain = /^\s*EXPLAIN\b/i.test(boundedSql);
+    // Bun values() preserves native values but exposes no column names. Carry
+    // labels alongside positional values; json_object_keys retains duplicate keys.
+    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json("__dbm_result"))), "__dbm_result".* FROM (${boundedSql}) AS "__dbm_result"`;
     try {
-      const query = connection.unsafe(toPgPlaceholders(boundedSql, params.length), params);
-      rows = await controlledPg(url, connection, query, signal, timeoutMs) as Record<string, unknown>[];
+      const query = connection.unsafe(toPgPlaceholders(positionalSql, params.length), params).values();
+      rows = await controlledPg(url, connection, query, signal, timeoutMs) as unknown[][];
     } catch (e) {
       if (e instanceof DbError) throw e;
       throw new DbError("sql", e instanceof Error ? e.message : String(e));
     }
+    const labels = explain ? ['QUERY PLAN'] : (rows[0]?.[0] ?? []) as string[];
+    const used = new Set(labels);
+    const seen = new Set<string>();
+    const columns = labels.map(label => {
+      let key = label;
+      for (let suffix = 2; seen.has(key); suffix++) {
+        key = `${label} (${suffix})`;
+        if (used.has(key)) { seen.add(key); continue; }
+      }
+      seen.add(key);
+      return key;
+    });
     const ms = Math.round((performance.now() - t0) * 10) / 10;
-    const wireRows = rows.slice(0, limit).map((row) => Object.fromEntries(Object.entries(row).map(([column, value]) => [column, encodeDbValue(value)])));
-    return { columns: columnsOf(rows), rows: wireRows, ms, hasMore: rows.length > limit, offset };
+    const wireRows = rows.slice(0, limit).map(row => Object.fromEntries(columns.map((column, i) => [column, encodeDbValue(row[i + (explain ? 0 : 1)])])));
+    return { columns, rows: wireRows, ms, hasMore: rows.length > limit, offset };
   } finally {
     if (inTransaction) await connection.unsafe("ROLLBACK").catch(() => {});
     connection.release();

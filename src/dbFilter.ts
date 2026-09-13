@@ -57,7 +57,7 @@ export function newGroup(): FilterGroup {
 
 export function isNumericType(t: string): boolean {
   const u = t.toUpperCase();
-  return u.includes("INT") || u.includes("REAL") || u.includes("FLOA") || u.includes("NUM") || u.includes("DOUBLE");
+  return u.includes("INT") || u.includes("REAL") || u.includes("FLOA") || u.includes("NUM") || u.includes("DEC") || u.includes("DOUBLE");
 }
 export function opsFor(type: string, dialect: DbDialect = "sqlite") {
   return isNumericType(type) ? NUM_OPS : dialect === "postgres" ? TEXT_OPS : SQLITE_TEXT_OPS;
@@ -76,10 +76,10 @@ function ident(name: string): string {
 }
 
 // --- execution compiler: parameterized WHERE + params ---
-function numOrThrow(v: string): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) throw new Error(`"${v}" is not a number`);
-  return n;
+function numOrThrow(v: string): string {
+  const value = v.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) throw new Error(`"${v}" is not a number`);
+  return value;
 }
 
 function compileRuleExec(r: FilterRule, cols: DbColumn[], params: unknown[], dialect: DbDialect): string {

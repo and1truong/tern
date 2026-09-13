@@ -1,3 +1,5 @@
+import { serializeRows } from "../src/dataTransfer.ts";
+import { compileGroup } from "../src/dbFilter.ts";
 import { describe, test, expect } from "bun:test";
 import { collectPgKeyMetadata, toPgPlaceholders, readPgSchema, runPgQuery, runPgExec } from "./pgServer.ts";
 import { DbError } from "../shared.ts";
@@ -79,6 +81,31 @@ const pgDescribe = PG ? describe : describe.skip;
 pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
+
+  test("duplicate labels, exact numeric filters and array exports round-trip", async () => {
+    const duplicate = await runPgQuery(url, 'SELECT 11 AS id, 22 AS id, 33 AS "id (2)"', []);
+    expect(new Set(duplicate.columns).size).toBe(3);
+    expect(duplicate.columns.map(c => duplicate.rows[0][c])).toEqual([11, 22, 33]);
+    await runPgExec(url, 'CREATE TABLE public.pgserver_transfer_test (id bigint, amount numeric, tags text[], nums integer[], matrix integer[][], document jsonb)');
+    try {
+      await runPgExec(url, `INSERT INTO public.pgserver_transfer_test VALUES (9007199254740993, 1.1234567890123456789, ARRAY['a,b', 'NULL', NULL, ''], ARRAY[1,2], ARRAY[[1,2],[3,4]], '[1,2]')`);
+      const schema = await readPgSchema(url);
+      const table = schema.tables.find(t => t.name === 'pgserver_transfer_test')!;
+      for (const [name, value] of [['id', '9007199254740993'], ['amount', '1.1234567890123456789']]) {
+        const filter = compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: table.columns.findIndex(c => c.name === name), op: 'equals', value }] }, table.columns, 'postgres');
+        const result = await runPgQuery(url, `SELECT id::text FROM public.pgserver_transfer_test WHERE ${filter.where}`, filter.params);
+        expect(result.rows).toEqual([{ id: '9007199254740993' }]);
+      }
+      const before = await runPgQuery(url, 'SELECT tags, nums, matrix, document FROM public.pgserver_transfer_test', []);
+      await runPgExec(url, serializeRows('sql', before.columns, before.rows, table));
+      const after = await runPgQuery(url, 'SELECT tags, nums, matrix, document FROM public.pgserver_transfer_test', []);
+      expect(after.rows).toEqual([before.rows[0], before.rows[0]]);
+      const special = { tags: ['quote"', "apostrophe'", 'back\\slash', 'NULL', null, ''], nums: [], matrix: [], document: [1, 2] };
+      await runPgExec(url, serializeRows('sql', before.columns, [special], table));
+      const restored = await runPgQuery(url, 'SELECT tags, nums, matrix, document FROM public.pgserver_transfer_test WHERE cardinality(nums) = 0', []);
+      expect(restored.rows).toEqual([special]);
+    } finally { await runPgExec(url, 'DROP TABLE public.pgserver_transfer_test'); }
+  });
 
   test("composite primary key DDL replays in catalog key order", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_ddl_test');

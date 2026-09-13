@@ -20,7 +20,7 @@ describe("compileGroup", () => {
     const m: FilterModel = { id: "g", combinator: "AND" as const, rules: [{ ...newRule(cols), col: 2, op: "gt", value: "50" }] };
     const out = compileGroup(m, cols);
     expect(out.where).toBe('("amount" > ?)');
-    expect(out.params).toEqual([50]);
+    expect(out.params).toEqual(["50"]);
   });
 
   test("AND group joins two rules", () => {
@@ -33,7 +33,7 @@ describe("compileGroup", () => {
     };
     const out = compileGroup(m, cols);
     expect(out.where).toBe('("name" LIKE ? AND "amount" > ?)');
-    expect(out.params).toEqual(["%al%", 50]);
+    expect(out.params).toEqual(["%al%", "50"]);
   });
 
   test("nested group uses OR joiner", () => {
@@ -100,4 +100,14 @@ describe("depth + ops", () => {
     expect(defaultOp("INTEGER")).toBe("equals");
     expect(defaultOp("TEXT")).toBe("contains");
   });
+});
+
+test('numeric parameters retain precision and reject non-numeric syntax', () => {
+  const numericColumns: DbColumn[] = [{ name: 'amount', type: 'DECIMAL', notNull: false, pk: false, fk: null }];
+  for (const value of ['9007199254740993', '1.1234567890123456789', '1e1000']) {
+    expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value }] }, numericColumns).params).toEqual([value]);
+  }
+  for (const value of [' ', 'NaN', 'Infinity', '0x10', '1; SELECT 2']) {
+    expect(() => compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value }] }, numericColumns)).toThrow('not a number');
+  }
 });
