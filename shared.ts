@@ -51,6 +51,7 @@ export interface QueryResult {
 }
 
 export interface ExecResult {
+  result?: QueryResult;
   rowsAffected: number;
   ms: number;
 }

@@ -132,8 +132,19 @@ export function firstSqlVerb(sql: string, dialect: Dialect = "sqlite"): string {
 }
 
 export function isWriteSql(sql: string, dialect: Dialect = "sqlite"): boolean {
-  const words = structuralWords(sql, dialect);
+  return isWriteWords(structuralWords(sql, dialect), dialect);
+}
+
+function isWriteWords(words: string[], dialect: Dialect): boolean {
   if (!words.length) return false;
+  if (words[0] === "EXPLAIN" && dialect === "postgres") {
+    let depth = 0;
+    for (let i = 1; i < words.length; i++) {
+      if (words[i] === "(") depth++;
+      if (words[i] === ")") depth--;
+      if (depth === 0 && ["SELECT", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE", "EXECUTE"].includes(words[i])) return isWriteWords(words.slice(i), dialect);
+    }
+  }
   if (words[0] === "PRAGMA") {
     if (words.includes("=")) return true;
     const argument = words.indexOf("(");

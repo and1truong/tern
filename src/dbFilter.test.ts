@@ -12,7 +12,7 @@ describe("compileGroup", () => {
   test("single text contains -> LIKE with ? param", () => {
     const m: FilterModel = { id: "g", combinator: "AND" as const, rules: [{ ...newRule(cols), col: 1, op: "contains", value: "al" }] };
     const out = compileGroup(m, cols);
-    expect(out.where).toBe('("name" LIKE ?)');
+    expect(out.where).toBe('("name" LIKE ? ESCAPE \'!\')');
     expect(out.params).toEqual(["%al%"]);
   });
 
@@ -32,7 +32,7 @@ describe("compileGroup", () => {
       ],
     };
     const out = compileGroup(m, cols);
-    expect(out.where).toBe('("name" LIKE ? AND "amount" > ?)');
+    expect(out.where).toBe('("name" LIKE ? ESCAPE \'!\' AND "amount" > ?)');
     expect(out.params).toEqual(["%al%", "50"]);
   });
 
@@ -48,7 +48,7 @@ describe("compileGroup", () => {
       ],
     };
     const out = compileGroup(m, cols);
-    expect(out.where).toBe('("name" LIKE ? AND ("amount" > ? OR "amount" < ?))');
+    expect(out.where).toBe('("name" LIKE ? ESCAPE \'!\' AND ("amount" > ? OR "amount" < ?))');
   });
 
   test("empty-value rules are skipped (inactive)", () => {
@@ -87,7 +87,7 @@ describe("previewWhere", () => {
         { ...newRule(cols), col: 2, op: "gt", value: "50" },
       ],
     };
-    expect(previewWhere(m, cols)).toBe('("name" LIKE \'%al%\' OR "amount" > 50)');
+    expect(previewWhere(m, cols)).toBe('("name" LIKE \'%al%\' ESCAPE \'!\' OR "amount" > 50)');
   });
 });
 
@@ -117,7 +117,7 @@ test('PostgreSQL nontext scalars default to equality and legacy text rules cast 
     expect(defaultOp(type, 'postgres')).toBe('equals');
     expect(opsFor(type, 'postgres').some(op => op.v === 'contains')).toBe(false);
     const columns: DbColumn[] = [{ name: 'value', type, notNull: false, pk: false, fk: null }];
-    expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'contains', value: 'a' }] }, columns, 'postgres').where).toBe('(CAST("value" AS text) LIKE ?)');
+    expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'contains', value: 'a' }] }, columns, 'postgres').where).toBe('(CAST("value" AS text) LIKE ? ESCAPE \'!\')');
   }
   expect(defaultOp('text', 'postgres')).toBe('contains');
 });
@@ -134,5 +134,13 @@ test('noncomparable PostgreSQL equality uses text conversion', () => {
   for (const type of ['json', 'xml', 'point']) {
     const columns: DbColumn[] = [{ name: 'value', type, notNull: false, pk: false, fk: null, comparable: false }];
     expect(compileGroup({ id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 0, op: 'equals', value: 'x' }] }, columns, 'postgres').where).toBe('(CAST("value" AS text) = ?)');
+  }
+});
+
+test('contains escapes literal LIKE metacharacters in both dialects', () => {
+  for (const dialect of ['sqlite', 'postgres'] as const) {
+    const model: FilterModel = { id: 'g', combinator: 'AND', rules: [{ id: 'r', col: 1, op: 'not_contains', value: "100%_!" }] };
+    expect(compileGroup(model, cols, dialect)).toEqual({ where: '("name" NOT LIKE ? ESCAPE \'!\')', params: ['%100!%!_!!%'] });
+    expect(previewWhere(model, cols, dialect)).toBe('("name" NOT LIKE \'%100!%!_!!%\' ESCAPE \'!\')');
   }
 });

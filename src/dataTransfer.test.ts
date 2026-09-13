@@ -60,3 +60,12 @@ test("omits identity columns and falls back to default-only inserts", () => {
     'INSERT INTO "public"."users" DEFAULT VALUES;\nINSERT INTO "public"."users" DEFAULT VALUES;\n',
   );
 });
+
+test('JSON exports omit hidden columns and preserve requested order', () => {
+  expect(JSON.parse(serializeRows('json', ['name'], [{ id: 1, name: 'Ada', secret: 'hidden' }]))).toEqual([{ name: 'Ada' }]);
+});
+
+test('CSV rejects truncated quoted values', () => {
+  expect(() => parseCsv('value\n"truncated')).toThrow('unterminated');
+  expect(() => parseCsv('value\n"truncated\n')).toThrow('unterminated');
+});

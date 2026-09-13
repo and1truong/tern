@@ -604,14 +604,20 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
   try {
     const t0 = performance.now();
     let rowsAffected = 0;
+    let result: QueryResult | undefined;
     try {
       const rows = await controlledPg(url, connection, connection.unsafe(sql), signal, timeoutMs) as unknown[];
       rowsAffected = affectedOf(rows);
+      if (sqlTokens(sql)[0] === "EXPLAIN") {
+        const records = rows as Record<string, unknown>[];
+        result = { columns: Object.keys(records[0] ?? {}), rows: records.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, encodeDbValue(value)]))), ms: 0, hasMore: false, offset: 0 };
+      }
     } catch (e) {
       throw new DbError("sql", e instanceof Error ? e.message : String(e));
     }
     const ms = Math.round((performance.now() - t0) * 10) / 10;
-    return { rowsAffected, ms };
+    if (result) result.ms = ms;
+    return { rowsAffected, ms, ...(result ? { result } : {}) };
   } finally {
     connection.release();
     await db.close().catch(() => {});

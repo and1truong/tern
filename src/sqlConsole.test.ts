@@ -95,3 +95,11 @@ test('transaction chains require a final terminator', () => {
   expect(executionUnits(['BEGIN', 'COMMIT AND CHAIN', 'SELECT 1', 'COMMIT'], 'postgres').transaction).toBe(true);
   expect(executionUnits(['BEGIN', 'ROLLBACK AND NO CHAIN'], 'postgres').transaction).toBe(true);
 });
+
+test('PostgreSQL EXPLAIN routes underlying writes through writable execution', () => {
+  expect(isWriteSql('EXPLAIN ANALYZE UPDATE t SET n=n+1', 'postgres')).toBe(true);
+  expect(isWriteSql('EXPLAIN (ANALYZE TRUE, FORMAT JSON) DELETE FROM t', 'postgres')).toBe(true);
+  expect(isWriteSql('EXPLAIN ANALYZE WITH changed AS (DELETE FROM t RETURNING *) SELECT * FROM changed', 'postgres')).toBe(true);
+  expect(isWriteSql('EXPLAIN ANALYZE SELECT "update" FROM t', 'postgres')).toBe(false);
+  expect(isWriteSql('EXPLAIN QUERY PLAN UPDATE t SET n=1', 'sqlite')).toBe(false);
+});

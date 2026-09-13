@@ -30,7 +30,7 @@ function sqlValue(value: unknown, postgres: boolean, type = ""): string {
 
 export function serializeRows(format: ExportFormat, columns: string[], rows: Record<string, unknown>[], table?: DbTable): string {
   const displayRows = rows.map((row) => Object.fromEntries(
-    Object.entries(row).map(([column, value]) => [column, unwrapDbValueForDisplay(value)]),
+    columns.map((column) => [column, unwrapDbValueForDisplay(row[column])]),
   ));
   if (format === "json") return JSON.stringify(displayRows, null, 2) + "\n";
   if (format === "markdown") {
@@ -78,6 +78,7 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
     }
     value += ch;
   }
+  if (quoted) throw new Error("CSV contains an unterminated quoted field");
   record.push(value);
   if (record.some((cell) => cell !== "")) records.push(record);
   const columns = (records.shift() ?? []).map((column) => column.trim());

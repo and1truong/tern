@@ -12,7 +12,7 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
   onDirty: (dirty: boolean) => void; onLatency: (ms: number) => void;
 }) {
   const [pane, setPane] = useState("data");
-  const [filter, setFilter] = useState<FilterModel>(newGroup);
+  let [filter, setFilter] = useState<FilterModel>(newGroup);
   const [filterOpen, setFilterOpen] = useState(false);
   const [sorts, setSorts] = useState<SortSpec[]>([]);
   const [page, setPage] = useState(0);
@@ -21,6 +21,15 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const columnKey = JSON.stringify(table.columns.map(({ name, type }) => [name, type]));
+  const [filterColumns, setFilterColumns] = useState(columnKey);
+  if (filterColumns !== columnKey) {
+    filter = newGroup();
+    setFilter(filter);
+    setFilterColumns(columnKey);
+    setSorts([]);
+    setPage(0);
+  }
   const { where, params } = compileGroup(filter, table.columns, source.kind);
   const query = `SELECT * FROM ${tableSql(table)}` + (where ? ` WHERE ${where}` : "") + orderBySql(sorts);
   const parameters = JSON.stringify(params);

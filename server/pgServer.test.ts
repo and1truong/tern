@@ -281,6 +281,18 @@ pgDescribe("pgServer (live)", () => {
     await runPgExec(url, `DROP TABLE ${T}`);
   });
 
+  test("writable EXPLAIN ANALYZE returns a plan and executes exactly once", async () => {
+    await runPgExec(url, 'CREATE TABLE public.pgserver_explain_test(v integer); INSERT INTO public.pgserver_explain_test VALUES(0)');
+    try {
+      const sql = 'EXPLAIN (ANALYZE TRUE, FORMAT JSON) UPDATE public.pgserver_explain_test SET v=v+1';
+      await expect(runPgQuery(url, sql, [])).rejects.toBeInstanceOf(DbError);
+      const executed = await runPgExec(url, sql);
+      expect(executed.result?.columns).toEqual(['QUERY PLAN']);
+      expect(executed.result?.rows).toHaveLength(1);
+      expect((await runPgQuery(url, 'SELECT v FROM public.pgserver_explain_test', [])).rows).toEqual([{ v: 1 }]);
+    } finally { await runPgExec(url, 'DROP TABLE public.pgserver_explain_test'); }
+  });
+
   test("query refuses write statements", async () => {
     await expect(runPgQuery(url, `DELETE FROM ${T}`, [], 100)).rejects.toBeInstanceOf(DbError);
   });

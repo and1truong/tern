@@ -79,6 +79,8 @@ function ident(name: string): string {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? `"${name}"` : `"${name.replace(/"/g, '""')}"`;
 }
 
+const likeValue = (value: string) => value.replace(/[!%_]/g, "!$&");
+
 // --- execution compiler: parameterized WHERE + params ---
 function numOrThrow(v: string): string {
   const value = v.trim();
@@ -92,8 +94,8 @@ function compileRuleExec(r: FilterRule, cols: DbColumn[], params: unknown[], dia
   const name = dialect === "postgres" && ((textOperation && !isTextType(col.type)) || (col.comparable === false && ["equals", "not_equals"].includes(r.op))) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
   const numeric = isNumericType(col.type);
   switch (r.op) {
-    case "contains": params.push(`%${r.value}%`); return `${name} LIKE ?`;
-    case "not_contains": params.push(`%${r.value}%`); return `${name} NOT LIKE ?`;
+    case "contains": params.push(`%${likeValue(r.value)}%`); return `${name} LIKE ? ESCAPE '!'`;
+    case "not_contains": params.push(`%${likeValue(r.value)}%`); return `${name} NOT LIKE ? ESCAPE '!'`;
     case "regex": {
       params.push(r.value); return `${name} ${dialect === "postgres" ? "~" : "GLOB"} ?`;
     }
@@ -137,8 +139,8 @@ function compileRulePreview(r: FilterRule, cols: DbColumn[], dialect: DbDialect)
   const name = dialect === "postgres" && ((textOperation && !isTextType(col.type)) || (col.comparable === false && ["equals", "not_equals"].includes(r.op))) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
   const numeric = isNumericType(col.type);
   switch (r.op) {
-    case "contains": return `${name} LIKE '%${r.value.replace(/'/g, "''")}%'`;
-    case "not_contains": return `${name} NOT LIKE '%${r.value.replace(/'/g, "''")}%'`;
+    case "contains": return `${name} LIKE '%${likeValue(r.value).replace(/'/g, "''")}%' ESCAPE '!'`;
+    case "not_contains": return `${name} NOT LIKE '%${likeValue(r.value).replace(/'/g, "''")}%' ESCAPE '!'`;
     case "regex": {
       return `${name} ${dialect === "postgres" ? "~" : "GLOB"} '${r.value.replace(/'/g, "''")}'`;
     }

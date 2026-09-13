@@ -93,6 +93,32 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await editor.pressSequentially('SELECT count(*) AS verified_users FROM verify.users;');
     await expect(page.getByRole('tab', { name: 'Query 1', exact: true })).toBeVisible();
   });
+  await test.step('Schema changes reset positional filters and writable EXPLAIN shows its plan', async () => {
+    const editor = page.locator('.cm-content[contenteditable=true]:visible');
+    const run = async (statement: string) => {
+      await editor.press('ControlOrMeta+a');
+      await editor.pressSequentially(statement);
+      await page.getByRole('button', { name: 'Run all', exact: true }).click();
+    };
+    await run("CREATE TABLE verify.filter_test (id integer, last text); INSERT INTO verify.filter_test VALUES (1, '100%_!'), (2, '1000');");
+    await page.getByRole('button', { name: /verify.filter_test.*2c/ }).click();
+    await page.getByRole('button', { name: 'Filter', exact: true }).click();
+    await page.getByTitle('Add rule', { exact: true }).click();
+    await page.locator('select').filter({ has: page.locator('option', { hasText: 'last (text)' }) }).selectOption('1');
+    await page.getByPlaceholder('value', { exact: true }).fill('100%_!');
+    await expect(page.getByRole('cell', { name: '100%_!', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '1000', exact: true })).toHaveCount(0);
+    await page.getByRole('tab', { name: 'Query 1', exact: true }).click();
+    await run('ALTER TABLE verify.filter_test DROP COLUMN last;');
+    await page.getByRole('tab', { name: 'verify.filter_test', exact: true }).click();
+    await expect(page.getByText('(match everything)', { exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Query 1', exact: true }).click();
+    await run('EXPLAIN ANALYZE UPDATE verify.filter_test SET id=id+10;');
+    await expect(page.getByRole('columnheader', { name: 'QUERY PLAN', exact: true })).toBeVisible();
+    expect(sql('SELECT sum(id) FROM verify.filter_test')).toBe('23');
+    await editor.press('ControlOrMeta+a');
+    await editor.pressSequentially('SELECT count(*) AS verified_users FROM verify.users;');
+  });
   await test.step('Migration dry-run rolls back; explicit apply commits', async () => {
     await page.locator('summary').filter({ hasText: /^Query$/ }).click();
     await page.getByRole('button', { name: 'Migration Studio', exact: true }).click();

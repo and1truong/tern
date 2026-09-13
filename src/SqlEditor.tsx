@@ -113,7 +113,8 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
       try {
         let output: StatementOutput;
         if (isWrite) {
-          output = { sql: statement, exec: await dbApi.exec(source, statement, true, abort.signal, timeoutMs) };
+          const exec = await dbApi.exec(source, statement, true, abort.signal, timeoutMs);
+          output = { sql: statement, exec, result: exec.result };
           wrote = true;
         } else {
           output = { sql: statement, result: await dbApi.query(source, statement, [], 1000, 0, abort.signal, timeoutMs) };
@@ -228,8 +229,9 @@ function SqlOutputs({ outputs, active, onActive }: { outputs: StatementOutput[];
         ))}
       </div>
       {output.error ? <Notice variant="error" layout="inline" className="p-3 text-xs">{output.error}</Notice>
+        : output.result ? <ResultTable result={output.result} />
         : output.exec ? <div className="p-3 mono text-xs text-[var(--muted)]">{output.exec.rowsAffected} row(s) affected · {output.exec.ms}ms</div>
-        : output.result ? <ResultTable result={output.result} /> : null}
+        : null}
     </div>
   );
 }
