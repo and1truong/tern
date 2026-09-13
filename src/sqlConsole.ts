@@ -30,6 +30,7 @@ function structuralWords(sql: string): string[] {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
     }
+    if (ch === "(" || ch === ")" || ch === ",") words.push(ch);
     if (/[A-Za-z_]/.test(ch)) {
       const start = i++;
       while (i < sql.length && /[A-Za-z0-9_$]/.test(sql[i])) i++;
@@ -47,6 +48,9 @@ export function splitSqlStatements(sql: string): { sql: string; from: number; to
   let lineComment = false;
   let blockComment = false;
   let dollarTag: string | null = null;
+  let trigger = false;
+  let bodyDepth = 0;
+  const leadingWords: string[] = [];
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
     if (lineComment) { if (ch === "\n") lineComment = false; continue; }
@@ -69,10 +73,23 @@ export function splitSqlStatements(sql: string): { sql: string; from: number; to
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
     }
-    if (ch === ";") {
+    if (/[A-Za-z_]/.test(ch)) {
+      const wordStart = i++;
+      while (i < sql.length && /[A-Za-z0-9_$]/.test(sql[i])) i++;
+      const word = sql.slice(wordStart, i).toUpperCase();
+      i--;
+      leadingWords.push(word);
+      if (leadingWords[0] === "CREATE" && leadingWords.length <= 3 && word === "TRIGGER") trigger = true;
+      if (trigger && (word === "BEGIN" || word === "CASE")) bodyDepth++;
+      if (trigger && word === "END") bodyDepth--;
+      continue;
+    }
+    if (ch === ";" && bodyDepth === 0) {
       const statement = sql.slice(start, i).trim();
       if (statement) statements.push({ sql: statement, from: start, to: i });
       start = i + 1;
+      trigger = false;
+      leadingWords.length = 0;
     }
   }
   const statement = sql.slice(start).trim();
@@ -99,5 +116,17 @@ export function firstSqlVerb(sql: string): string {
 }
 
 export function isWriteSql(sql: string): boolean {
-  return structuralWords(sql).some((word) => WRITE_VERBS.has(word));
+  const words = structuralWords(sql);
+  if (WRITE_VERBS.has(words[0])) return true;
+  if (words[0] !== "WITH") return false;
+  let depth = 0;
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    if (word === "(") depth++;
+    if (word === ")") depth--;
+    const startsBody = words[i - 1] === "(" && ["AS", "MATERIALIZED"].includes(words[i - 2]);
+    const startsMain = depth === 0 && words[i - 1] === ")";
+    if ((startsBody || startsMain) && ["INSERT", "UPDATE", "DELETE", "MERGE"].includes(word)) return true;
+  }
+  return false;
 }

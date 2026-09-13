@@ -1,3 +1,4 @@
+import { splitSqlStatements } from "../src/sqlConsole.ts";
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -272,4 +273,31 @@ describe("runRowChanges", () => {
     const row = runQuery(path, "SELECT email FROM users WHERE id = 1", [], 10).rows[0];
     expect(row.email).toBe("a@x");
   });
+});
+
+test('duplicate query labels preserve every positional value, including empty result metadata', () => {
+  const path = join(dir, 'duplicate.sqlite');
+  createDatabase(path);
+  const result = runQuery(path, 'SELECT 11 AS id, 22 AS id, 33 AS "id:1"', []);
+  expect(new Set(result.columns).size).toBe(3);
+  expect(result.columns.map(name => result.rows[0][name])).toEqual([11, 22, 33]);
+  const empty = runQuery(path, 'SELECT 11 AS id, 22 AS id WHERE 0', []);
+  expect(empty.columns).toHaveLength(2);
+  expect(empty.rows).toEqual([]);
+});
+
+
+test('split trigger script executes both body statements', () => {
+  const path = join(dir, 'trigger-split.sqlite');
+  createDatabase(path);
+  const script = `CREATE TABLE posts (id integer, comment text);
+    CREATE TABLE logs (message text);
+    CREATE TRIGGER audit AFTER INSERT ON posts BEGIN
+      UPDATE posts SET comment = CASE WHEN new.id = 1 THEN 'updated' ELSE 'other' END;
+      INSERT INTO logs VALUES ('logged');
+    END;
+    INSERT INTO posts VALUES (1, 'before');`;
+  for (const statement of splitSqlStatements(script)) runExec(path, statement.sql);
+  expect(runQuery(path, 'SELECT comment FROM posts', []).rows).toEqual([{ comment: 'updated' }]);
+  expect(runQuery(path, 'SELECT message FROM logs', []).rows).toEqual([{ message: 'logged' }]);
 });

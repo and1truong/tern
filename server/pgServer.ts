@@ -384,9 +384,10 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         t.ddl = viewDdl.get(`${t.schema}.${t.name}`) ?? "";
         continue;
       }
-      const body = t.columns
-        .map((c) => `  "${c.name}" ${c.type}${c.notNull ? " NOT NULL" : ""}${c.pk ? " PRIMARY KEY" : ""}`)
-        .join(",\n");
+      const primaryColumns = keys.filter(row => row.table_schema === t.schema && row.table_name === t.name && row.constraint_type === 'PRIMARY KEY').map(row => String(row.column_name));
+      const definitions = t.columns.map(c => `  "${c.name.replace(/"/g, '""')}" ${c.type}${c.notNull ? " NOT NULL" : ""}`);
+      if (primaryColumns.length) definitions.push(`  PRIMARY KEY (${primaryColumns.map(name => `"${name.replace(/"/g, '""')}"`).join(', ')})`);
+      const body = definitions.join(",\n");
       const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
       t.ddl = `CREATE TABLE ${relation} (\n${body}\n);`;
     }

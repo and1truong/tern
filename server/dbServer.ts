@@ -189,18 +189,12 @@ export function runQuery(pathRaw: string, sql: string, params: unknown[], limitR
   try {
     const t0 = performance.now();
     const stmt = db.prepare(boundedSql);
-    let columns: string[] = [];
-    try {
-      // bun:sqlite exposes column metadata on the prepared statement.
-      const cols = (stmt as unknown as { columns?: () => { name: string }[] }).columns?.() ?? [];
-      columns = cols.map((c) => c.name);
-    } catch { /* fall back to row keys below */ }
-    let rows: Record<string, unknown>[];
-    try { rows = stmt.all(...(params as never[])) as Record<string, unknown>[]; }
+    const columns = stmt.columnNames;
+    let rows: unknown[][];
+    try { rows = stmt.values(...(params as never[])); }
     catch (e) { throw new DbError("sql", e instanceof Error ? e.message : String(e)); }
-    if (!columns.length && rows.length) columns = Object.keys(rows[0]);
     const ms = Math.round((performance.now() - t0) * 10) / 10;
-    const wireRows = rows.slice(0, limit).map((row) => Object.fromEntries(Object.entries(row).map(([column, value]) => [column, encodeDbValue(value)])));
+    const wireRows = rows.slice(0, limit).map(row => Object.fromEntries(columns.map((column, i) => [column, encodeDbValue(row[i])])));
     return { columns, rows: wireRows, ms, hasMore: rows.length > limit, offset };
   } finally {
     db.close();

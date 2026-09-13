@@ -40,3 +40,20 @@ describe("SQL console statement selection", () => {
     expect(isWriteSql("SELECT 'DELETE', \"UPDATE\" FROM users -- DROP TABLE users")).toBe(false);
   });
 });
+
+test('read-query identifiers are not metadata commands', () => {
+  expect(isWriteSql('SELECT comment FROM posts')).toBe(false);
+  expect(isWriteSql('WITH rows AS (SELECT merge FROM posts) SELECT merge FROM rows')).toBe(false);
+  expect(isWriteSql('WITH rows AS (SELECT 1) UPDATE posts SET comment = 1')).toBe(true);
+  expect(isWriteSql('WITH rows AS (SELECT comment FROM posts) SELECT comment FROM rows')).toBe(false);
+});
+
+test('SQLite trigger bodies stay intact for Run and Run all', () => {
+  const trigger = `CREATE TEMP TRIGGER audit AFTER INSERT ON posts BEGIN
+    UPDATE posts SET comment = CASE WHEN new.id = 1 THEN 'a;b' ELSE 'c' END;
+    INSERT INTO logs VALUES ('done');
+  END`;
+  const script = `${trigger}; SELECT 1;`;
+  expect(splitSqlStatements(script).map(s => s.sql)).toEqual([trigger, 'SELECT 1']);
+  expect(sqlToRun(script, { from: script.indexOf('INSERT INTO logs'), to: script.indexOf('INSERT INTO logs') }, false)).toEqual([trigger]);
+});

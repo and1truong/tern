@@ -80,6 +80,17 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("composite primary key DDL replays in catalog key order", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_ddl_test');
+    try {
+      await runPgExec(url, 'CREATE TABLE pgserver_ddl_test.original (a integer, b integer, PRIMARY KEY (b, a))');
+      const schema = await readPgSchema(url);
+      const ddl = schema.tables.find(t => t.schema === 'pgserver_ddl_test' && t.name === 'original')!.ddl!;
+      expect(ddl).toContain('PRIMARY KEY ("b", "a")');
+      await runPgExec(url, ddl.replace('"original"', '"copy"'));
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_ddl_test CASCADE'); }
+  });
+
   test("catalog skips aggregates while retaining functions and procedures", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_aggregate_test');
     try {
