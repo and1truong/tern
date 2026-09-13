@@ -397,7 +397,7 @@ function InsertRowModal({ table, onClose, onAdd }: {
   onAdd: (values: Record<string, unknown>) => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
-  const writableColumns = table.columns.filter((column) => !column.generated && !column.identity);
+  const writableColumns = table.columns.filter((column) => !column.generated && column.identityGeneration !== "ALWAYS");
   const submit = () => {
     const row: Record<string, unknown> = {};
     for (const column of writableColumns) {
@@ -431,7 +431,7 @@ function InsertRowModal({ table, onClose, onAdd }: {
               </span>
             </label>
           ))}
-          <span className="text-[10px] text-[var(--faint)]">Use \N for SQL NULL; double a leading backslash for literal text. Uncheck default to insert an explicit value, including an empty string; generated and identity columns are filled by the database.</span>
+          <span className="text-[10px] text-[var(--faint)]">Use \N for SQL NULL; double a leading backslash for literal text. Uncheck default to insert an explicit value, including an empty string; generated and ALWAYS identity columns are filled by the database.</span>
         </div>
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border)]">
           <button onClick={onClose} className="px-3 py-1.5 text-xs font-semibold text-[var(--muted)]">Cancel</button>
@@ -460,11 +460,11 @@ function ImportCsvModal({ table, onClose, onStage }: {
       if (!parsed.rows.length) throw new Error("CSV has no data rows");
       if (parsed.rows.length > 500) throw new Error("Import is limited to 500 rows per transaction");
       const known = new Map(table.columns.map((column) => [column.name, column]));
-      const writable = new Map(table.columns.filter((column) => !column.generated && !column.identity).map((column) => [column.name, column]));
+      const writable = new Map(table.columns.filter((column) => !column.generated && column.identityGeneration !== "ALWAYS").map((column) => [column.name, column]));
       const unknown = parsed.columns.filter((column) => !known.has(column));
       if (unknown.length) throw new Error(`Unknown column${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
       const readonly = parsed.columns.filter((column) => !writable.has(column));
-      if (readonly.length) throw new Error(`Generated or identity column${readonly.length === 1 ? " is" : "s are"} not writable: ${readonly.join(", ")}`);
+      if (readonly.length) throw new Error(`Generated or ALWAYS identity column${readonly.length === 1 ? " is" : "s are"} not writable: ${readonly.join(", ")}`);
       onStage(parsed.rows.map((row) => Object.fromEntries(parsed.columns.map((name) => [name, coerceCellValue(row[name], writable.get(name)?.type ?? "")]))));
     } catch (stageError) { setError(String(stageError)); }
   };

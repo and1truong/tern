@@ -52,7 +52,8 @@ async function exercise(width: number) {
     table: {
       name: "users", type: "table", rowCount: -1, ddl: "",
       columns: [
-        { name: "id", type: "integer", notNull: true, pk: true, fk: null },
+        { name: "id", type: "integer", notNull: true, pk: true, fk: null, identity: true, identityGeneration: "BY DEFAULT" },
+        { name: "always_id", type: "integer", notNull: true, pk: false, fk: null, identity: true, identityGeneration: "ALWAYS" },
         { name: "name", type: "text", notNull: true, pk: false, fk: null },
         { name: "computed", type: "integer", notNull: true, pk: false, fk: null, generated: true },
       ],
@@ -155,6 +156,9 @@ async function exercise(width: number) {
   await settle();
   if (!byLabel("Close add row")) fail(`${width}px: add-row modal is not visible`);
   if (byLabel("New computed")) fail(`${width}px: generated column is editable in the add-row modal`);
+  if (!byLabel("New id")) fail(`${width}px: BY DEFAULT identity is missing from add-row modal`);
+  if (!(byLabel("Use default for id") as HTMLInputElement)?.checked) fail(`${width}px: BY DEFAULT identity must initially use its default`);
+  if (byLabel("New always_id")) fail(`${width}px: ALWAYS identity is editable in add-row modal`);
   const stageDefault = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Stage row");
   stageDefault?.click();
   await settle();
@@ -173,6 +177,11 @@ async function exercise(width: number) {
   stageImport?.click();
   await settle();
   if (!container.textContent?.includes("not writable: computed")) fail(`${width}px: CSV import accepted a generated column`);
+  setValue(csvContent, "always_id\n3");
+  await settle();
+  stageImport?.click();
+  await settle();
+  if (!container.textContent?.includes("not writable: always_id")) fail(`${width}px: CSV import accepted an ALWAYS identity`);
   setValue(csvContent, "id,name\n3,Katherine\n4,Dorothy");
   await settle();
   stageImport?.click();

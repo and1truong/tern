@@ -475,3 +475,14 @@ test('ambiguous BEGIN identifiers cannot hide a trigger-script COMMIT', () => {
   runMigration(path, 'CREATE TRIGGER "begin" AFTER INSERT ON "begin" BEGIN SELECT CASE WHEN 1 THEN 1 ELSE 2 END; END;', false);
   expect(runQuery(path, "SELECT name FROM sqlite_master WHERE type='trigger'", []).rows).toEqual([]);
 });
+
+
+test('SQLite transaction batches retain their last row-producing result', () => {
+  const path = join(dir, 'transaction-results.sqlite');
+  seed(path);
+  expect(runExec(path, 'BEGIN; SELECT 42 AS answer; COMMIT;').result?.rows).toEqual([{ answer: 42 }]);
+  expect(runExec(path, "BEGIN; INSERT INTO users(email) VALUES('batch-returned') RETURNING email; COMMIT;").result?.rows).toEqual([{ email: 'batch-returned' }]);
+  expect(runExec(path, 'BEGIN; SELECT 1 AS first; SELECT 2 AS last; COMMIT;').result?.rows).toEqual([{ last: 2 }]);
+  expect(runExec(path, 'BEGIN; SELECT id FROM users WHERE 0; COMMIT;').result).toMatchObject({ columns: ['id'], rows: [] });
+  expect(runQuery(path, "SELECT count(*) AS n FROM users WHERE email='batch-returned'", []).rows).toEqual([{ n: 1 }]);
+});

@@ -233,13 +233,14 @@ export function runExec(pathRaw: string, sql: string): ExecResult {
       catch (error) { if (!(error instanceof DbError) || error.code !== "multi_statement") throw error; multiple = true; }
       if (returning || multiple) {
         const statements = multiple ? splitSqlStatements(sql, "sqlite").map(s => s.sql) : [sql];
-        if (statements.length > 1) db.exec(statements.slice(0, -1).join(";\n") + ";");
-        const statement = db.prepare(statements.at(-1)!);
-        const labels = statement.columnNames;
-        const rows = labels.length ? statement.values() as unknown[][] : (statement.run(), []);
-        const width = rows[0]?.length ?? labels.length;
-        const columns = width === labels.length && new Set(labels).size === labels.length ? labels : Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
-        if (columns.length || returning) result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
+        for (const text of statements) {
+          const statement = db.prepare(text);
+          const labels = statement.columnNames;
+          const rows = labels.length ? statement.values() as unknown[][] : (statement.run(), []);
+          const width = rows[0]?.length ?? labels.length;
+          const columns = width === labels.length && new Set(labels).size === labels.length ? labels : Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
+          if (columns.length || returning) result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
+        }
       } else db.exec(sql);
       rowsAffected = multiple ? null : Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);
     }
