@@ -232,7 +232,7 @@ function SqlOutputs({ outputs, active, onActive }: { outputs: StatementOutput[];
       </div>
       {output.error ? <Notice variant="error" layout="inline" className="p-3 text-xs">{output.error}</Notice>
         : output.result ? <ResultTable result={output.result} />
-        : output.exec ? <div className="p-3 mono text-xs text-[var(--muted)]">{output.exec.rowsAffected} row(s) affected · {output.exec.ms}ms</div>
+        : output.exec ? <div className="p-3 mono text-xs text-[var(--muted)]">{output.exec.rowsAffected === null ? "Execution complete · affected-row total unavailable" : `${output.exec.rowsAffected} row(s) affected`} · {output.exec.ms}ms</div>
         : null}
     </div>
   );

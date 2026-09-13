@@ -397,3 +397,25 @@ test('SQLite DML RETURNING executes once and preserves requested values', () => 
   expect(runExec(path, 'DELETE FROM users WHERE id=3 RETURNING id AS x, id+1 AS x').result?.rows).toEqual([{ 'Column 1': 3, 'Column 2': 4 }]);
   expect(runQuery(path, 'SELECT count(*) AS n FROM users', []).rows).toEqual([{ n: 2 }]);
 });
+
+test('SQLite scripts do not report last-statement counts as committed totals', () => {
+  const path = join(dir, 'script-count.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t (id integer)');
+  expect(runExec(path, 'BEGIN; INSERT INTO t VALUES (1); INSERT INTO t VALUES (2); COMMIT;').rowsAffected).toBeNull();
+  expect(runQuery(path, 'SELECT id FROM t ORDER BY id', []).rows).toEqual([{ id: 1 }, { id: 2 }]);
+  expect(runExec(path, 'BEGIN; DELETE FROM t; ROLLBACK;').rowsAffected).toBeNull();
+  expect(runQuery(path, 'SELECT count(*) AS n FROM t', []).rows).toEqual([{ n: 2 }]);
+});
+
+test('SQLite partial unique indexes remain visible but cannot identify rows', () => {
+  const path = join(dir, 'partial-identity.sqlite');
+  createDatabase(path);
+  runExec(path, `CREATE TABLE t (code text NOT NULL, enabled integer, stable text NOT NULL);
+    CREATE UNIQUE INDEX partial_code ON t(code) WHERE enabled=1;
+    CREATE UNIQUE INDEX stable_identity ON t(stable);
+    CREATE UNIQUE INDEX expression_identity ON t(lower(code));`);
+  const schema = readSchema(path);
+  expect(schema.tables.find(t => t.name === 't')!.uniqueKeys).toEqual([['stable']]);
+  expect(schema.indexes.find(i => i.name === 'partial_code')?.unique).toBe(true);
+});

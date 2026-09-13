@@ -25,6 +25,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const close = () => { if (!busy) onClose(); };
   const createDdl = (query: string) => `CREATE VIEW${ifne && source.kind === "sqlite" ? " IF NOT EXISTS" : ""} "${name.replace(/"/g, '""')}" AS ${query}`;
   let ddl = "";
   let validationError = "";
@@ -51,12 +52,12 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   };
 
   return (
-    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div onClick={close} className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
       <div onClick={(e) => e.stopPropagation()} className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">
         <div className="flex items-center gap-2 px-4 h-12 border-b border-[var(--border)]">
           <DbIcon size={15} className="text-[var(--accent)]" />
           <span className="text-sm font-semibold text-[var(--text)] flex-1">Create view</span>
-          <button onClick={onClose} className="w-7 h-7 grid place-items-center rounded-md hover:bg-[var(--hover)] text-[var(--muted)]"><X size={15} /></button>
+          <button disabled={busy} onClick={close} className="w-7 h-7 grid place-items-center rounded-md hover:bg-[var(--hover)] text-[var(--muted)]"><X size={15} /></button>
         </div>
 
         <div className="p-4 flex flex-col gap-3 overflow-auto">
@@ -113,7 +114,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
             <Play size={13} /> Preview
           </button>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-sm font-semibold text-[var(--muted)] border border-[var(--border-2)] hover:bg-[var(--hover)]">Cancel</button>
+            <button disabled={busy} onClick={close} className="px-3 py-1.5 rounded-lg text-sm font-semibold text-[var(--muted)] border border-[var(--border-2)] hover:bg-[var(--hover)]">Cancel</button>
             <button onClick={create} disabled={!canCreate || busy}
               className="px-4 py-1.5 rounded-lg text-sm font-bold bg-[var(--accent)] text-[var(--panel)] disabled:opacity-40">Create</button>
           </div>

@@ -102,20 +102,20 @@ export function readSchema(pathRaw: string): DbSchema {
           ddl: o.sql ?? "",
         });
       } else if (o.type === "index") {
-        const flags = db.query<{ unique: number; origin: string }, [string, string]>("SELECT `unique`, origin FROM pragma_index_list(?) WHERE name = ?").get(o.tbl_name, o.name);
+        const flags = db.query<{ unique: number; origin: string; partial: number }, [string, string]>("SELECT `unique`, origin, partial FROM pragma_index_list(?) WHERE name = ?").get(o.tbl_name, o.name);
         const columns = db.query<{ name: string }, []>(`PRAGMA index_info(${quoteIdent(o.name)})`).all().map((column) => column.name);
         indexes.push({ name: o.name, table: o.tbl_name, unique: flags?.unique === 1, columns, sql: o.sql ?? "" });
-        if (flags?.unique === 1 && columns.length) {
+        if (flags?.unique === 1 && flags.partial === 0 && columns.length && columns.every(column => column != null)) {
           const table = tables.find((candidate) => candidate.name === o.tbl_name);
           if (table) table.uniqueKeys = [...(table.uniqueKeys ?? []), columns];
         }
       } else if (o.type === "trigger") triggers.push({ name: o.name, table: o.tbl_name, sql: o.sql ?? "" });
     }
     for (const table of tables.filter((candidate) => candidate.type === "table")) {
-      const listed = db.query<{ name: string; unique: number }, []>(`PRAGMA index_list(${quoteIdent(table.name)})`).all();
+      const listed = db.query<{ name: string; unique: number; partial: number }, []>(`PRAGMA index_list(${quoteIdent(table.name)})`).all();
       for (const item of listed) {
         const columns = db.query<{ name: string }, []>(`PRAGMA index_info(${quoteIdent(item.name)})`).all().map((column) => column.name);
-        if (item.unique === 1 && columns.length && !(table.uniqueKeys ?? []).some((key) => key.join("\0") === columns.join("\0"))) {
+        if (item.unique === 1 && item.partial === 0 && columns.length && columns.every(column => column != null) && !(table.uniqueKeys ?? []).some((key) => key.join("\0") === columns.join("\0"))) {
           table.uniqueKeys = [...(table.uniqueKeys ?? []), columns];
         }
         if (!indexes.some((index) => index.name === item.name)) indexes.push({ name: item.name, table: table.name, unique: item.unique === 1, columns, sql: "" });
@@ -223,12 +223,13 @@ export function runExec(pathRaw: string, sql: string): ExecResult {
   const db = openWrite(resolvePath(pathRaw), true);
   try {
     const t0 = performance.now();
-    let rowsAffected = 0;
+    let rowsAffected: number | null = 0;
     let result: QueryResult | undefined;
     try {
       let returning = false;
+      let multiple = false;
       try { returning = sqlTokens(normalizeSingleStatement(sql, "sqlite"), "sqlite").includes("RETURNING"); }
-      catch (error) { if (!(error instanceof DbError) || error.code !== "multi_statement") throw error; }
+      catch (error) { if (!(error instanceof DbError) || error.code !== "multi_statement") throw error; multiple = true; }
       if (returning) {
         const statement = db.prepare(sql);
         const labels = statement.columnNames;
@@ -237,7 +238,7 @@ export function runExec(pathRaw: string, sql: string): ExecResult {
         const columns = width === labels.length && new Set(labels).size === labels.length ? labels : Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
         result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
       } else db.exec(sql);
-      rowsAffected = Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);
+      rowsAffected = multiple ? null : Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);
     }
     catch (e) { throw new DbError("sql", e instanceof Error ? e.message : String(e)); }
     const ms = Math.round((performance.now() - t0) * 10) / 10;

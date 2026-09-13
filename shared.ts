@@ -52,7 +52,7 @@ export interface QueryResult {
 
 export interface ExecResult {
   result?: QueryResult;
-  rowsAffected: number;
+  rowsAffected: number | null;
   ms: number;
 }
 

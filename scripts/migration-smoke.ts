@@ -60,3 +60,40 @@ await exercise(1280);
 await exercise(480);
 if (previews !== 2 || applies !== 2) fail(`unexpected endpoint counts: ${previews} previews, ${applies} applies`);
 console.log("PASS: migration dry-run/apply flow works at 1280px and 480px");
+
+// A pending CREATE must remain visible until the write completes.
+{
+  (globalThis as any).HTMLInputElement = win.HTMLInputElement;
+  const React = (await import("react")).default;
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const { DatabaseCreateViewModal } = await import("../src/DatabaseCreateViewModal.tsx");
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  let closed = 0;
+  let finish!: (response: Response) => void;
+  (globalThis as any).fetch = () => new Promise<Response>(resolve => { finish = resolve; });
+  const root = createRoot(container);
+  flushSync(() => root.render(React.createElement(DatabaseCreateViewModal, {
+    source: { kind: "sqlite", path: "/tmp/test.sqlite", label: "Test" },
+    onClose: () => { closed++; }, onCreated: () => {},
+  })));
+  const name = container.querySelector("input")!;
+  Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(name, "example");
+  name.dispatchEvent(new Event("input", { bubbles: true }));
+  setValue(container.querySelector("textarea")!, "SELECT 1");
+  await settle();
+  const buttons = () => [...container.querySelectorAll("button")];
+  buttons().find(b => b.textContent === "Create")!.click();
+  await settle();
+  (container.firstElementChild as HTMLElement).click();
+  buttons()[0].click();
+  buttons().find(b => b.textContent === "Cancel")!.click();
+  if (closed) fail("pending view creation allowed dismissal");
+  finish(Response.json({ rowsAffected: 0, ms: 1 }));
+  await settle(); await settle();
+  if (closed !== 1) fail("view creation did not close after completion");
+  flushSync(() => root.unmount());
+  container.remove();
+}
+console.log("PASS: view creation blocks dismissal while its write is pending");
