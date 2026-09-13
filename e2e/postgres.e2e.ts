@@ -1,25 +1,27 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
-const sql = (query: string) => execFileSync('docker', ['compose', '-f', 'compose.verify.yml', 'exec', '-T', 'postgres', 'psql', '-U', 'dbm', '-d', 'dbm_verify', '-v', 'ON_ERROR_STOP=1', '-Atc', query], { encoding: 'utf8' }).trim();
+const sql = (query: string) => execFileSync('docker', ['compose', '-f', 'compose.verify.yml', 'exec', '-T', 'postgres', 'psql', '-U', 'tern', '-d', 'tern_verify', '-v', 'ON_ERROR_STOP=1', '-Atc', query], { encoding: 'utf8' }).trim();
 
 test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restore', async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
+  await expect(page).toHaveTitle('Tern — Database Workbench');
   await test.step('Create and test a real saved connection', async () => {
     await page.getByRole('button', { name: 'New connection', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Connection manager' });
     await dialog.getByLabel('Name', { exact: true }).fill('Docker PostgreSQL');
     await dialog.getByLabel('Host', { exact: true }).fill('127.0.0.1');
     await dialog.getByLabel('Port', { exact: true }).fill('15432');
-    await dialog.getByLabel('Database', { exact: true }).fill('dbm_verify');
-    await dialog.getByLabel('Username', { exact: true }).fill('dbm');
+    await dialog.getByLabel('Database', { exact: true }).fill('tern_verify');
+    await dialog.getByLabel('Username', { exact: true }).fill('tern');
     await dialog.getByRole('button', { name: 'Test Connection' }).click();
     await expect(dialog.getByRole('status')).toContainText('Connected: PostgreSQL');
     await dialog.getByRole('button', { name: 'Save & Connect' }).click();
     await page.getByRole('combobox', { name: 'Database', exact: true }).selectOption('postgres');
-    await page.getByRole('combobox', { name: 'Database', exact: true }).selectOption('dbm_verify');
+    await page.getByRole('combobox', { name: 'Database', exact: true }).selectOption('tern_verify');
     await page.getByRole('button', { name: /verify.users.*3c/ }).click();
     await page.getByRole('button', { name: 'Remove Docker PostgreSQL', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Close this connection’s documents before removing it.');
@@ -34,6 +36,20 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await page.getByRole('button', { name: 'Previous', exact: true }).click();
     await page.getByRole('button', { name: 'Sort by name', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'User 001', exact: true })).toBeVisible();
+  });
+  await test.step('Export all excludes hidden columns', async () => {
+    await page.getByRole('button', { name: 'Columns 3/3', exact: true }).click();
+    await page.getByLabel('email', { exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Columns 2/3', exact: true }).click();
+    await page.getByLabel('Export format', { exact: true }).selectOption('json');
+    const downloaded = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export all', exact: true }).click();
+    const rows = JSON.parse(readFileSync((await (await downloaded).path())!, 'utf8'));
+    expect(rows).toHaveLength(125);
+    expect(rows.every((row: object) => !('email' in row))).toBe(true);
+    await page.getByRole('button', { name: 'Columns 2/3', exact: true }).click();
+    await page.getByLabel('email', { exact: true }).check();
+    await page.getByRole('button', { name: 'Columns 3/3', exact: true }).click();
   });
   await test.step('Staging does not write; reviewed transaction commits', async () => {
     await page.getByRole('button', { name: 'Read Only', exact: true }).click();
@@ -164,8 +180,8 @@ test('saved writable default applies on connect and reload but refresh preserves
   await dialog.getByLabel('Name', { exact: true }).fill('Writable PostgreSQL');
   await dialog.getByLabel('Host', { exact: true }).fill('127.0.0.1');
   await dialog.getByLabel('Port', { exact: true }).fill('15432');
-  await dialog.getByLabel('Database', { exact: true }).fill('dbm_verify');
-  await dialog.getByLabel('Username', { exact: true }).fill('dbm');
+  await dialog.getByLabel('Database', { exact: true }).fill('tern_verify');
+  await dialog.getByLabel('Username', { exact: true }).fill('tern');
   await dialog.getByLabel('Default to read-only').uncheck();
   await dialog.getByRole('button', { name: 'Save & Connect' }).click();
   await expect(page.getByRole('button', { name: '● Writable', exact: true })).toBeVisible();

@@ -21,7 +21,7 @@ function handlers() {
 }
 
 test("create makes a new sqlite database", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "dbm-create-"));
+  const dir = mkdtempSync(join(tmpdir(), "tern-create-"));
   const path = join(dir, "created.sqlite");
   try {
     const response = await handlers().create(new Request("http://x/create", {
@@ -41,7 +41,7 @@ test("schema of a missing sqlite path maps DbError(not_found) to 404", async () 
 });
 
 test("query with a write verb maps DbError(not_read_only) to 400", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "dbm-"));
+  const dir = mkdtempSync(join(tmpdir(), "tern-"));
   const f = join(dir, "y.sqlite");
   const d = new Database(f); d.exec("CREATE TABLE t(a)"); d.close();
   try {
@@ -53,7 +53,7 @@ test("query with a write verb maps DbError(not_read_only) to 400", async () => {
 });
 
 test("exec requires explicit write confirmation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "dbm-"));
+  const dir = mkdtempSync(join(tmpdir(), "tern-"));
   const f = join(dir, "write.sqlite");
   new Database(f).close();
   try {
@@ -73,7 +73,7 @@ test("exec requires explicit write confirmation", async () => {
 });
 
 test("migration preview rolls back and apply commits", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "dbm-migration-"));
+  const dir = mkdtempSync(join(tmpdir(), "tern-migration-"));
   const path = join(dir, "migration.sqlite");
   new Database(path).close();
   const script = "CREATE TABLE migrated (id INTEGER PRIMARY KEY);";
@@ -92,7 +92,7 @@ test("migration preview rolls back and apply commits", async () => {
 });
 
 test("row changes preview then apply through the structured endpoint", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "dbm-"));
+  const dir = mkdtempSync(join(tmpdir(), "tern-"));
   const f = join(dir, "rows.sqlite");
   const db = new Database(f);
   db.exec("CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO users VALUES (1, 'Ada')");

@@ -25,7 +25,7 @@ exercised; required/verified TLS modes are delegated to Bun.SQL.
 ## Docker + Playwright (2026-09-13)
 
 `bun run test:e2e` passed in Chromium against PostgreSQL 17.11, database
-`dbm_verify`, loopback port 15432. The six browser steps cover connection testing
+`tern_verify`, loopback port 15432. The six browser steps cover connection testing
 and saving, read-only controls, server paging/sorting, staged edit versus commit,
 SQL execution, migration rollback/apply, and SQL/connection restoration after reload.
 `psql` independently confirms staged changes do not write and migration dry-runs

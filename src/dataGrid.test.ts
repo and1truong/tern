@@ -26,9 +26,9 @@ describe("data-grid query helpers", () => {
   });
 
   test("unwraps escaped JSON values when copying CSV", () => {
-    const value = { __dbmWire: { kind: "binary", base64: "AA==" } };
+    const value = { __ternWire: { kind: "binary", base64: "AA==" } };
     expect(rowsToCsv(["payload"], [{ payload: encodeDbValue(value) }])).toBe(
-      'payload\n"{""__dbmWire"":{""kind"":""binary"",""base64"":""AA==""}}"',
+      'payload\n"{""__ternWire"":{""kind"":""binary"",""base64"":""AA==""}}"',
     );
   });
 });

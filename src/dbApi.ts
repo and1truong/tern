@@ -28,7 +28,7 @@ async function asJson<T>(res: Response): Promise<T> {
 function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   return fetch(path, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-dbm-session": session },
+    headers: { "content-type": "application/json", "x-tern-session": session },
     body: JSON.stringify(body),
     signal,
   }).then(asJson<T>);

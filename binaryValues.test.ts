@@ -4,15 +4,15 @@ import { binaryByteLength, decodeDbValue, encodeDbValue, isDbBinaryValue, unwrap
 test("round-trips binary database values through a tagged JSON-safe representation", () => {
   const encoded = encodeDbValue(new Uint8Array([0, 1, 127, 128, 255]));
   expect(isDbBinaryValue(encoded)).toBe(true);
-  expect(binaryByteLength(encoded as { __dbmWire: { kind: "binary"; base64: string } })).toBe(5);
+  expect(binaryByteLength(encoded as { __ternWire: { kind: "binary"; base64: string } })).toBe(5);
   expect([...decodeDbValue(encoded) as Uint8Array]).toEqual([0, 1, 127, 128, 255]);
 });
 
 test("does not reinterpret ordinary JSON objects as binary", () => {
   const values = [
-    { __dbmBinary: "AA==" },
-    { __dbmWire: { kind: "binary", base64: "AA==" } },
-    { __dbmWire: { kind: "json", value: "original" } },
+    { __ternBinary: "AA==" },
+    { __ternWire: { kind: "binary", base64: "AA==" } },
+    { __ternWire: { kind: "json", value: "original" } },
   ];
   for (const value of values) {
     const encoded = encodeDbValue(value);

@@ -1,3 +1,4 @@
+import { legacyDataFile, migrateAppDatabase } from "./legacyMigration.ts";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, basename, isAbsolute, join } from "node:path";
@@ -5,7 +6,11 @@ import { homedir } from "node:os";
 import { migrations } from "./migrations.ts";
 import type { DbFile } from "../shared.ts";
 
-export function openAppDatabase(path = process.env.DBM_DATA_FILE ?? join(homedir(), ".dbm", "app.sqlite")) {
+export function openAppDatabase(path?: string) {
+  if (path === undefined) {
+    path = process.env.TERN_DATA_FILE ?? join(homedir(), ".tern", "app.sqlite");
+    if (!process.env.TERN_DATA_FILE) migrateAppDatabase(legacyDataFile(), path);
+  }
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path, { create: true });
   if (path !== ":memory:") chmodSync(path, 0o600);

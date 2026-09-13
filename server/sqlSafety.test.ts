@@ -35,7 +35,7 @@ describe("SQL read-only safety", () => {
 
   test("wraps row-producing reads with one look-ahead row", () => {
     expect(boundReadSql("SELECT * FROM t", 50, 100)).toBe(
-      `SELECT * FROM (SELECT * FROM t\n) AS "__dbm_query" LIMIT 51 OFFSET 100`,
+      `SELECT * FROM (SELECT * FROM t\n) AS "__tern_query" LIMIT 51 OFFSET 100`,
     );
   });
 

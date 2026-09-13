@@ -65,7 +65,7 @@ async function exercise(width: number) {
       rows: [
         { id: 1, name: "Ada", computed: 2 },
         { id: 2, name: "G".repeat(200), computed: 4 },
-        { id: 3, name: { __dbmWire: { kind: "binary", base64: "AA==" } }, computed: 6 },
+        { id: 3, name: { __ternWire: { kind: "binary", base64: "AA==" } }, computed: 6 },
         { id: 4, name: { ok: true }, computed: 8 },
       ],
       ms: 1.2,

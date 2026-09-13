@@ -168,7 +168,12 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
               c.is_nullable, c.ordinal_position, c.column_default,
               pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) AS owned_sequence,
               c.is_identity, c.is_generated, c.identity_generation, c.identity_start, c.identity_increment, c.generation_expression,
-              t.table_type
+              t.table_type, pg_get_partkeydef(rel.oid) AS partition_key,
+              CASE WHEN rel.relispartition THEN pg_get_expr(rel.relpartbound, rel.oid) END AS partition_bound,
+              (SELECT format('%I.%I', pn.nspname, parent.relname) FROM pg_inherits inh
+                JOIN pg_class parent ON parent.oid = inh.inhparent
+                JOIN pg_namespace pn ON pn.oid = parent.relnamespace
+                WHERE inh.inhrelid = rel.oid LIMIT 1) AS parent_relation
          FROM information_schema.columns c
          JOIN pg_namespace n ON n.nspname = c.table_schema
          JOIN pg_class rel ON rel.relnamespace = n.oid AND rel.relname = c.table_name
@@ -437,7 +442,9 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       }
       const body = definitions.join(",\n");
       const relation = `"${t.schema!.replace(/"/g, '""')}"."${t.name.replace(/"/g, '""')}"`;
-      t.ddl = `CREATE TABLE ${relation} (\n${body}\n);`;
+      const metadata = cols.find(row => row.table_schema === t.schema && row.table_name === t.name)!;
+      t.ddl = `CREATE TABLE ${relation} (\n${body}\n)${metadata.partition_key ? ` PARTITION BY ${metadata.partition_key}` : ""};`;
+      if (metadata.partition_bound) t.ddl += `\nALTER TABLE ${metadata.parent_relation} ATTACH PARTITION ${relation} ${metadata.partition_bound};`;
     }
 
     const sequenceRows = await db.unsafe(
@@ -524,7 +531,7 @@ export async function runPgQuery(
     const explain = sqlTokens(boundedSql)[0] === "EXPLAIN";
     // Bun values() preserves native values but exposes no column names. Carry
     // labels alongside positional values; json_object_keys retains duplicate keys.
-    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json((SELECT "__dbm_shape" FROM (SELECT "__dbm_result".*) AS "__dbm_shape")))), "__dbm_result".* FROM (VALUES (1)) AS "__dbm_seed" LEFT JOIN LATERAL (SELECT TRUE AS "__dbm_present", "__dbm_rows".* FROM (${boundedSql}) AS "__dbm_rows") AS "__dbm_result" ON TRUE`;
+    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json((SELECT "__tern_shape" FROM (SELECT "__tern_result".*) AS "__tern_shape")))), "__tern_result".* FROM (VALUES (1)) AS "__tern_seed" LEFT JOIN LATERAL (SELECT TRUE AS "__tern_present", "__tern_rows".* FROM (${boundedSql}) AS "__tern_rows") AS "__tern_result" ON TRUE`;
     try {
       if (sqlTokens(boundedSql)[0] === "SHOW") {
         const result = await controlledPg(url, connection, connection.unsafe(boundedSql, params), signal, timeoutMs) as Record<string, unknown>[];

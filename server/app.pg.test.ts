@@ -18,39 +18,39 @@ test.skipIf(!url)('standalone PostgreSQL profile, database selection, read-only,
     const list = await app(new Request(`http://localhost/api/databases?${query}`));
     expect((await list.json()).databases).toContain(source.database);
     expect((await app(new Request(`http://localhost/api/schema?${query}`))).ok).toBe(true);
-    expect((await post('exec', { ...source, sql: 'CREATE TABLE dbm_api_test(id int primary key, name text)', allowWrite: true })).status).toBe(403);
+    expect((await post('exec', { ...source, sql: 'CREATE TABLE tern_api_test(id int primary key, name text)', allowWrite: true })).status).toBe(403);
     await post('access', { ...source, writable: true });
-    await post('exec', { ...source, sql: 'CREATE SEQUENCE dbm_preview_guard_seq', allowWrite: true });
+    await post('exec', { ...source, sql: 'CREATE SEQUENCE tern_preview_guard_seq', allowWrite: true });
     try {
       await post('access', { ...source, writable: false });
-      expect((await post('migration/preview', { ...source, sql: "SELECT setval('dbm_preview_guard_seq', 99)" })).status).toBe(403);
-      const sequence = await (await post('query', { ...source, sql: 'SELECT last_value::text FROM dbm_preview_guard_seq' })).json();
+      expect((await post('migration/preview', { ...source, sql: "SELECT setval('tern_preview_guard_seq', 99)" })).status).toBe(403);
+      const sequence = await (await post('query', { ...source, sql: 'SELECT last_value::text FROM tern_preview_guard_seq' })).json();
       expect(sequence.rows[0].last_value).toBe('1');
     } finally {
       await post('access', { ...source, writable: true });
-      await post('exec', { ...source, sql: 'DROP SEQUENCE dbm_preview_guard_seq', allowWrite: true });
+      await post('exec', { ...source, sql: 'DROP SEQUENCE tern_preview_guard_seq', allowWrite: true });
     }
-    await post('exec', { ...source, sql: 'DROP TABLE IF EXISTS dbm_api_test', allowWrite: true });
-    const migration = { ...source, sql: 'CREATE TABLE dbm_api_test(id int primary key, name text)', allowWrite: true };
+    await post('exec', { ...source, sql: 'DROP TABLE IF EXISTS tern_api_test', allowWrite: true });
+    const migration = { ...source, sql: 'CREATE TABLE tern_api_test(id int primary key, name text)', allowWrite: true };
     expect((await post('migration/preview', migration)).ok).toBe(true);
-    const absent = await post('query', { ...source, sql: "SELECT to_regclass('public.dbm_api_test') AS name" });
+    const absent = await post('query', { ...source, sql: "SELECT to_regclass('public.tern_api_test') AS name" });
     expect((await absent.json()).rows[0].name).toBeNull();
     expect((await post('migration/apply', migration)).ok).toBe(true);
-    const insert = [{ kind: 'insert', table: { schema: 'public', name: 'dbm_api_test' }, values: { id: 1, name: 'before' } }];
+    const insert = [{ kind: 'insert', table: { schema: 'public', name: 'tern_api_test' }, values: { id: 1, name: 'before' } }];
     expect((await post('rows/apply', { ...source, changes: insert, allowWrite: true })).ok).toBe(true);
-    const conflict = [{ kind: 'update', table: { schema: 'public', name: 'dbm_api_test' }, key: { id: 1 }, expected: { name: 'stale' }, values: { name: 'after' } }];
+    const conflict = [{ kind: 'update', table: { schema: 'public', name: 'tern_api_test' }, key: { id: 1 }, expected: { name: 'stale' }, values: { name: 'after' } }];
     expect((await post('rows/apply', { ...source, changes: conflict, allowWrite: true })).status).toBe(409);
-    const rows = await (await post('query', { ...source, sql: 'SELECT name FROM dbm_api_test WHERE id = ?', params: [1] })).json();
+    const rows = await (await post('query', { ...source, sql: 'SELECT name FROM tern_api_test WHERE id = ?', params: [1] })).json();
     expect(rows.rows).toEqual([{ name: 'before' }]);
     const insights = await (await app(new Request(`http://localhost/api/insights?${query}`))).json();
-    expect(insights.tables.some((t: { name: string }) => t.name === 'public.dbm_api_test')).toBe(true);
+    expect(insights.tables.some((t: { name: string }) => t.name === 'public.tern_api_test')).toBe(true);
     const cancel = new AbortController();
     const running = post('query', { ...source, sql: 'SELECT pg_sleep(20)' }, cancel.signal);
     setTimeout(() => cancel.abort(), 100);
     expect((await running).status).toBe(408);
     expect((await post('query', { ...source, sql: 'SELECT pg_sleep(20)', timeoutMs: 1000 })).status).toBe(408);
   } finally {
-    await post('exec', { ...source, sql: 'DROP TABLE IF EXISTS dbm_api_test', allowWrite: true });
+    await post('exec', { ...source, sql: 'DROP TABLE IF EXISTS tern_api_test', allowWrite: true });
     db.close();
   }
 }, 15000);

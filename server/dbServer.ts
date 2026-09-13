@@ -60,12 +60,12 @@ function readCols(db: Database, name: string, isView: boolean): DbColumn[] {
     `PRAGMA table_xinfo(${quoteIdent(name)})`,
   ).all().filter((column) => column.hidden !== 1);
   // foreign keys (tables only; views have none)
-  let fkMap: Record<string, string> = {};
+  const fkMap: Record<string, string[]> = Object.create(null);
   if (!isView) {
     for (const row of db.query<{ table: string; from: string; to: string }, []>(
       `PRAGMA foreign_key_list(${quoteIdent(name)})`,
     ).all()) {
-      fkMap[row.from] = `${row.table}(${row.to})`;
+      fkMap[row.from] = [...(fkMap[row.from] ?? []), `${row.table}(${row.to})`];
     }
   }
   return info.map((c) => ({
@@ -142,8 +142,8 @@ export function readSchema(pathRaw: string): DbSchema {
         const index = indexes.find((candidate) => candidate.table === table.name && candidate.columns?.join("\0") === unique.join("\0"));
         constraints.push({ name: index?.name ?? `uq_${table.name}_${unique.join("_")}`, table: table.name, type: "UNIQUE", columns: unique, definition: `UNIQUE (${unique.join(", ")})` });
       }
-      for (const column of table.columns) if (column.fk) {
-        constraints.push({ name: `fk_${table.name}_${column.name}`, table: table.name, type: "FOREIGN KEY", columns: [column.name], definition: `${column.name} → ${column.fk}` });
+      for (const column of table.columns) for (const [index, target] of [column.fk ?? []].flat().entries()) {
+        constraints.push({ name: `fk_${table.name}_${column.name}_${index}`, table: table.name, type: "FOREIGN KEY", columns: [column.name], definition: `${column.name} → ${target}` });
       }
     }
     return { tables, schemas: ["main"], indexes, triggers, constraints, sequences: [], routines: [], extensions: [], pragmas };

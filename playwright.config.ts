@@ -15,7 +15,7 @@ export default defineConfig({
   webServer: {
     command: 'bun server.ts',
     url: 'http://127.0.0.1:14320',
-    env: { PORT: '14320', DBM_DATA_FILE: '.e2e/app.sqlite' },
+    env: { PORT: '14320', TERN_DATA_FILE: '.e2e/app.sqlite' },
     reuseExistingServer: false,
   },
 });

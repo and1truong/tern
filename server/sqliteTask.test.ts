@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { sqliteTask } from "./sqliteTask.ts";
 
 test('native SQLite query timeout and cancellation leave the server responsive', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dbm-cancel-'));
+  const dir = mkdtempSync(join(tmpdir(), 'tern-cancel-'));
   const path = join(dir, 'test.sqlite'); new Database(path).close();
   const sql = 'WITH RECURSIVE x(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM x) SELECT sum(n) FROM x';
   try {

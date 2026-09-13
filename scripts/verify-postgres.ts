@@ -5,7 +5,7 @@ async function run(command: string[]) {
   if (await process.exited) throw new Error(`Failed: ${command.join(' ')}`);
 }
 await run(['docker', 'compose', '-f', 'compose.verify.yml', 'up', '-d', '--wait']);
-await run(['docker', 'compose', '-f', 'compose.verify.yml', 'exec', '-T', 'postgres', 'psql', '-U', 'dbm', '-d', 'dbm_verify', '-v', 'ON_ERROR_STOP=1', '-f', '/seed.sql']);
+await run(['docker', 'compose', '-f', 'compose.verify.yml', 'exec', '-T', 'postgres', 'psql', '-U', 'tern', '-d', 'tern_verify', '-v', 'ON_ERROR_STOP=1', '-f', '/seed.sql']);
 await run(['bun', 'run', 'build']);
 mkdirSync('.e2e', { recursive: true });
 for (const suffix of ['', '-wal', '-shm']) rmSync(`.e2e/app.sqlite${suffix}`, { force: true });

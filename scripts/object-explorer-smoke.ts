@@ -29,8 +29,9 @@ async function exercise(width: number) {
   const { flushSync } = await import("react-dom");
   const { InsightsPane, ObjectTree, SchemaDiagramPane } = await import("../src/DatabaseViews.tsx");
   const schema = {
-    schemas: ["audit", "public"],
+    schemas: ["audit", "public", "main"],
     tables: [
+      { schema: "main", name: "main_table", type: "table", rowCount: 0, ddl: "", columns: [] },
       { schema: "public", name: "users", type: "table", rowCount: 20, ddl: "", columns: [{ name: "email", type: "text", notNull: true, pk: false, fk: null }] },
       { schema: "audit", name: "user_events", type: "materialized_view", rowCount: -1, ddl: "", columns: [{ name: "actor_id", type: "uuid", notNull: true, pk: false, fk: "users(id)" }] },
     ],
@@ -47,6 +48,7 @@ async function exercise(width: number) {
   if (!container.textContent?.includes("audit") || !container.textContent?.includes("Materialized") || !container.textContent?.includes("Routines")) {
     fail(`${width}px: schema/object sections are missing`);
   }
+  if (!container.textContent?.includes("main_table")) fail("PostgreSQL main schema was hidden");
   const search = container.querySelector('[aria-label="Search database objects"]') as HTMLInputElement | null;
   if (!search) fail(`${width}px: object search is missing`);
   setValue(search, "email");
@@ -66,7 +68,7 @@ async function exercise(width: number) {
   const diagramRoot = createRoot(diagramContainer);
   const diagramSchema = { ...schema, tables: schema.tables.map((table: any) => ({ ...table, type: "table" })) };
   flushSync(() => diagramRoot.render(React.createElement(SchemaDiagramPane, { schema: diagramSchema })));
-  if (!diagramContainer.textContent?.includes("2 tables · 1 relationships") || !diagramContainer.textContent?.includes("actor_id")) {
+  if (!diagramContainer.textContent?.includes("3 tables · 1 relationships") || !diagramContainer.textContent?.includes("actor_id")) {
     fail(`${width}px: relationship diagram is incomplete`);
   }
   const copy = [...diagramContainer.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Copy Mermaid");

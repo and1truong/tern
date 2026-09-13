@@ -34,7 +34,7 @@ export function ObjectTree({ schema, activeTable, onSelect, locked }: {
   const schemaNames = schema.schemas?.length ? schema.schemas : [...new Set(visibleTables.map((table) => table.schema).filter(Boolean))] as string[];
   const groups = (schemaNames.length ? schemaNames : [""]).map((name) => ({
     name,
-    tables: visibleTables.filter((table) => (table.schema ?? "") === (name === "main" ? "" : name)),
+    tables: visibleTables.filter((table) => (table.schema ?? (name === "main" ? "main" : "")) === name),
   })).filter((group) => group.tables.length > 0);
   if (!groups.length && visibleTables.length) groups.push({ name: "", tables: visibleTables });
   const Section = ({ label, items, icon }: { label: string; items: DbTable[]; icon: React.ReactNode }) => (
@@ -164,7 +164,7 @@ export function DataGrid({ table, source, writable, columns, result, sorts, page
     setTransferBusy(true); setMutationError(null);
     try {
       const data = all ? await onExportAll() : { columns: visibleCols, rows: selectedRows };
-      download(serializeRows(exportFormat, data.columns, data.rows, table), exportFormat);
+      download(serializeRows(exportFormat, data.columns.filter(column => visibleCols.includes(column)), data.rows, table), exportFormat);
     } catch (error) { setMutationError(String(error)); }
     finally { setTransferBusy(false); }
   };
@@ -496,7 +496,7 @@ function ImportCsvModal({ table, onClose, onStage }: {
 
 function ValueInspector({ column, value, onClose }: { column: string; value: unknown; onClose: () => void }) {
   const text = isDbBinaryValue(value)
-    ? `Binary value (${binaryByteLength(value).toLocaleString()} bytes)\n\nBase64:\n${value.__dbmWire.base64}`
+    ? `Binary value (${binaryByteLength(value).toLocaleString()} bytes)\n\nBase64:\n${value.__ternWire.base64}`
     : (() => {
       const displayValue = unwrapDbValueForDisplay(value);
       return typeof displayValue === "object" ? JSON.stringify(displayValue, null, 2) : String(displayValue);

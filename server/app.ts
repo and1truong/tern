@@ -18,7 +18,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
     const origin = req.headers.get("origin");
     if ((origin && origin !== url.origin) || req.headers.get("sec-fetch-site") === "cross-site") return fail("Cross-origin request denied", 403);
     if (req.method === "POST" && req.headers.get("content-type")?.split(";")[0] !== "application/json") return fail("JSON required", 415);
-    const session = req.headers.get("x-dbm-session") ?? "api";
+    const session = req.headers.get("x-tern-session") ?? "api";
     if (session.length > 100) return fail("Invalid session");
     const h = makeHandlers(connections, (id, database) => writable.has(`${session}:${id}/${database ?? ""}`));
     try {

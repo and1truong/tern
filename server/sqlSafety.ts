@@ -134,5 +134,5 @@ export function boundReadSql(sql: string, limit: number, offset = 0, dialect: "s
   const normalized = assertReadOnlySql(sql, dialect);
   const verb = sqlTokens(normalized, dialect)[0];
   if (verb === "EXPLAIN" || verb === "PRAGMA" || verb === "SHOW") return normalized;
-  return `SELECT * FROM (${normalized}\n) AS "__dbm_query" LIMIT ${limit + 1} OFFSET ${offset}`;
+  return `SELECT * FROM (${normalized}\n) AS "__tern_query" LIMIT ${limit + 1} OFFSET ${offset}`;
 }

@@ -363,3 +363,12 @@ test('SQLite top-level savepoints execute together and release their transaction
   expect(runQuery(path, 'SELECT email FROM users WHERE email IN (\'saved\', \'reverted\')', []).rows).toEqual([{ email: 'saved' }]);
   expect(() => executionUnits(['SAVEPOINT s', 'SAVEPOINT t', 'RELEASE t'], 'sqlite')).toThrow('COMMIT or ROLLBACK');
 });
+
+test('SQLite retains all foreign keys sharing one source column', () => {
+  const path = join(dir, 'foreign-keys.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE a(id INTEGER PRIMARY KEY); CREATE TABLE b(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER REFERENCES a(id) REFERENCES b(id));');
+  const schema = readSchema(path);
+  expect([schema.tables.find(t => t.name === 'child')!.columns[0].fk].flat().sort()).toEqual(['a(id)', 'b(id)']);
+  expect(schema.constraints?.filter(c => c.table === 'child' && c.type === 'FOREIGN KEY')).toHaveLength(2);
+});

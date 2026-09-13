@@ -1,11 +1,11 @@
-const WIRE_TAG = "__dbmWire";
+const WIRE_TAG = "__ternWire";
 
 export interface DbBinaryValue {
-  __dbmWire: { kind: "binary"; base64: string };
+  __ternWire: { kind: "binary"; base64: string };
 }
 
 interface DbEscapedJsonValue {
-  __dbmWire: { kind: "json"; value: unknown };
+  __ternWire: { kind: "json"; value: unknown };
 }
 
 function hasWireTag(value: unknown): value is Record<typeof WIRE_TAG, unknown> {

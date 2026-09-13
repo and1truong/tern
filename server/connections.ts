@@ -1,8 +1,9 @@
+import { LEGACY_SECRET_SERVICE, withLegacyCredentials } from "./legacyMigration.ts";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import type { PgConnection } from "../shared.ts";
 
-const SECRET_SERVICE = "dev.dbm.credentials";
+const SECRET_SERVICE = "dev.tern.credentials";
 
 interface PgConnectionRow {
   id: string;
@@ -21,11 +22,15 @@ export interface SecretStore {
   delete(name: string): Promise<boolean>;
 }
 
-const systemSecrets: SecretStore = {
+const systemSecrets: SecretStore = withLegacyCredentials({
   get: (name) => Bun.secrets.get({ service: SECRET_SERVICE, name }),
   set: (name, value) => Bun.secrets.set({ service: SECRET_SERVICE, name, value, allowUnrestrictedAccess: false }),
   delete: (name) => Bun.secrets.delete({ service: SECRET_SERVICE, name }),
-};
+}, {
+  get: (name) => Bun.secrets.get({ service: LEGACY_SECRET_SERVICE, name }),
+  set: async () => { throw new Error("Legacy credentials are read-only"); },
+  delete: async () => false,
+});
 
 export function validateConnectionUrl(url: string): void {
   let parsed: URL;
@@ -94,10 +99,12 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
 
       // Lazy migration for v1 rows: persist securely before scrubbing SQLite.
       const secretName = `connection:${found.id}`;
-      await secrets.set(secretName, found.url);
+      const existing = await secrets.get(secretName);
+      const migratedUrl = existing ?? found.url;
+      if (existing === null) await secrets.set(secretName, migratedUrl);
       db.query("UPDATE pg_connections SET url = ?, secret_name = ? WHERE id = ?")
-        .run(sanitizedUrl(found.url), secretName, found.id);
-      return found.url;
+        .run(sanitizedUrl(migratedUrl), secretName, found.id);
+      return migratedUrl;
     },
     save: async (label, url, options = {}) => {
       validateConnectionUrl(url);

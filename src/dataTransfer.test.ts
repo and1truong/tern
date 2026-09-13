@@ -25,7 +25,7 @@ test("parses quoted CSV including commas, escaped quotes, and newlines", () => {
 });
 
 test("exports stored JSON instead of its collision-escape envelope", () => {
-  const value = { __dbmWire: { kind: "binary", base64: "AA==" } };
+  const value = { __ternWire: { kind: "binary", base64: "AA==" } };
   const rows = [{ payload: encodeDbValue(value) }];
   expect(JSON.parse(serializeRows("json", ["payload"], rows))).toEqual([{ payload: value }]);
   expect(serializeRows("sql", ["payload"], rows, table)).toContain(JSON.stringify(value));

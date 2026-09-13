@@ -23,4 +23,4 @@ const server = Bun.serve({
     } });
   },
 });
-console.log(`DBM → ${server.url}`);
+console.log(`Tern → ${server.url}`);

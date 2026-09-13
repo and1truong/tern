@@ -323,6 +323,20 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SERVER pgserver_fdw_test CASCADE'); }
   });
 
+  test("partition DDL restores bounds and routing", async () => {
+    await runPgExec(url, 'CREATE SCHEMA tern_partition_test; CREATE TABLE tern_partition_test.parent(id integer) PARTITION BY RANGE(id); CREATE TABLE tern_partition_test.child PARTITION OF tern_partition_test.parent FOR VALUES FROM(0) TO(10)');
+    try {
+      const schema = await readPgSchema(url);
+      const parent = schema.tables.find(t => t.schema === 'tern_partition_test' && t.name === 'parent')!;
+      const child = schema.tables.find(t => t.schema === 'tern_partition_test' && t.name === 'child')!;
+      await runPgExec(url, 'DROP TABLE tern_partition_test.parent CASCADE');
+      await runPgExec(url, parent.ddl + child.ddl);
+      await runPgExec(url, 'INSERT INTO tern_partition_test.parent VALUES(5)');
+      expect((await runPgQuery(url, 'SELECT id FROM tern_partition_test.child', [])).rows).toEqual([{ id: 5 }]);
+      await expect(runPgExec(url, 'INSERT INTO tern_partition_test.child VALUES(20)')).rejects.toThrow();
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_partition_test CASCADE'); }
+  });
+
   test("query refuses write statements", async () => {
     await expect(runPgQuery(url, `DELETE FROM ${T}`, [], 100)).rejects.toBeInstanceOf(DbError);
   });

@@ -7,7 +7,7 @@ import { openAppDatabase } from "./appDatabase.ts";
 import { makeApp } from "./app.ts";
 
 test("standalone API persists state and recent files, denies implicit access/writes, and gates migration apply", async () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'dbm-app-')));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tern-app-')));
   const path = join(dir, 'user.sqlite');
   const user = new Database(path); user.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES (1, \'Ada\')'); user.close();
   let db = openAppDatabase(join(dir, 'app.sqlite'));
@@ -20,7 +20,7 @@ test("standalone API persists state and recent files, denies implicit access/wri
     expect((await post('query', { path, sql: 'DELETE FROM users' })).status).toBe(400);
     expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
     expect((await post('access', { path, writable: true })).status).toBe(200);
-    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true }, { 'x-dbm-session': 'new-window' })).status).toBe(403);
+    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true }, { 'x-tern-session': 'new-window' })).status).toBe(403);
     const migration = { path, sql: 'CREATE TABLE audit(id INTEGER)', allowWrite: true };
     expect((await post('migration/apply', migration)).status).toBe(400);
     expect((await post('migration/preview', migration)).status).toBe(200);
