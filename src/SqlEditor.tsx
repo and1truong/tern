@@ -5,7 +5,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import type { DbSchema, ExecResult, QueryResult } from "../shared.ts";
 import { dbApi } from "./dbApi.ts";
 import type { DbSource } from "./dbApi.ts";
-import { isWriteSql, sqlToRun } from "./sqlConsole.ts";
+import { isWriteSql, sqlToRun, executionUnits } from "./sqlConsole.ts";
 import Notice from "./Notice.tsx";
 import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../binaryValues.ts";
 
@@ -91,7 +91,10 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     if (busy || !ready) return;
     const view = editor.current;
     const selection = view?.state.selection.main ?? { from: 0, to: 0 };
-    const statements = sqlToRun(active.sql, selection, all, source.kind);
+    let units: ReturnType<typeof executionUnits>;
+    try { units = executionUnits(sqlToRun(active.sql, selection, all, source.kind), source.kind); }
+    catch (e) { setError(String(e)); return; }
+    const { statements, transaction } = units;
     if (!statements.length) return;
     setBusy(true); setError(null); setOutputs([]); setActiveOutput(0);
     const abort = new AbortController();
@@ -102,7 +105,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     for (const statement of statements) {
       if (abort.signal.aborted) break;
       const started = performance.now();
-      const isWrite = isWriteSql(statement, source.kind);
+      const isWrite = transaction || isWriteSql(statement, source.kind);
       if (isWrite && !writable) {
         nextOutputs.push({ sql: statement, error: "Read-only mode: enable Writable before running this statement." });
         break;

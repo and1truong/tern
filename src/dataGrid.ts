@@ -95,7 +95,7 @@ export function buildRowChanges(
     const values: Record<string, unknown> = {};
     for (const column of table.columns) {
       const stagedKey = editKey(rowIndex, column.name);
-      if (stagedKey in edits) values[column.name] = edits[stagedKey];
+      if (stagedKey in edits && !nonComparableColumns.has(column.name)) values[column.name] = edits[stagedKey];
     }
     if (identity.length && Object.keys(values).length) {
       changes.push({ kind: "update", table: tableRef, key, expected, values });

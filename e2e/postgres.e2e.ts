@@ -82,6 +82,17 @@ test('real PostgreSQL: connect, browse, stage, commit, query, migrate and restor
     await expect(page.getByRole('cell', { name: '127', exact: true })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Query 1', exact: true })).toBeVisible();
   });
+  await test.step('Run all preserves transaction rollback on a later error', async () => {
+    const editor = page.locator('.cm-content[contenteditable=true]:visible');
+    await editor.press('ControlOrMeta+a');
+    await editor.pressSequentially("BEGIN; UPDATE verify.users SET name='should rollback' WHERE id=1; SELECT missing_column FROM verify.users; ROLLBACK;");
+    await page.getByRole('button', { name: 'Run all', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Result 1 · error', exact: true })).toBeVisible();
+    expect(sql('SELECT name FROM verify.users WHERE id=1')).toBe('Edited by Playwright');
+    await editor.press('ControlOrMeta+a');
+    await editor.pressSequentially('SELECT count(*) AS verified_users FROM verify.users;');
+    await expect(page.getByRole('tab', { name: 'Query 1', exact: true })).toBeVisible();
+  });
   await test.step('Migration dry-run rolls back; explicit apply commits', async () => {
     await page.locator('summary').filter({ hasText: /^Query$/ }).click();
     await page.getByRole('button', { name: 'Migration Studio', exact: true }).click();

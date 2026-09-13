@@ -4,6 +4,7 @@ export interface SqlSelection { from: number; to: number }
 function structuralWords(sql: string, dialect: Dialect = "sqlite"): string[] {
   const words: string[] = [];
   let quote: "'" | '"' | "`" | null = null;
+  let escapeString = false;
   let lineComment = false;
   let blockComment = 0;
   let dollarTag: string | null = null;
@@ -20,12 +21,17 @@ function structuralWords(sql: string, dialect: Dialect = "sqlite"): string[] {
       continue;
     }
     if (quote) {
+      if (escapeString && ch === "\\") { i++; continue; }
       if (ch === quote) { if (sql[i + 1] === quote) i++; else quote = null; }
       continue;
     }
     if (ch === "-" && sql[i + 1] === "-") { lineComment = true; i++; continue; }
     if (ch === "/" && sql[i + 1] === "*") { blockComment = 1; i++; continue; }
-    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      escapeString = dialect === "postgres" && ch === "'" && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
+      continue;
+    }
     if (ch === "$") {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
@@ -45,6 +51,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
   const statements: { sql: string; from: number; to: number }[] = [];
   let start = 0;
   let quote: "'" | '"' | "`" | null = null;
+  let escapeString = false;
   let lineComment = false;
   let blockComment = 0;
   let dollarTag: string | null = null;
@@ -64,6 +71,7 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       continue;
     }
     if (quote) {
+      if (escapeString && ch === "\\") { i++; continue; }
       if (ch === quote) {
         if (sql[i + 1] === quote) i++;
         else quote = null;
@@ -72,7 +80,11 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
     }
     if (ch === "-" && sql[i + 1] === "-") { lineComment = true; i++; continue; }
     if (ch === "/" && sql[i + 1] === "*") { blockComment = 1; i++; continue; }
-    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      escapeString = dialect === "postgres" && ch === "'" && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
+      continue;
+    }
     if (ch === "$") {
       const match = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
       if (match) { dollarTag = match[0]; i += match[0].length - 1; continue; }
@@ -139,4 +151,22 @@ export function isWriteSql(sql: string, dialect: Dialect = "sqlite"): boolean {
     if ((startsBody || startsMain) && ["INSERT", "UPDATE", "DELETE", "MERGE"].includes(word)) return true;
   }
   return false;
+}
+
+
+export function executionUnits(statements: string[], dialect: Dialect): { statements: string[]; transaction: boolean } {
+  let open = false;
+  let transaction = false;
+  for (const statement of statements) {
+    const words = structuralWords(statement, dialect);
+    const verb = words[0];
+    if (verb === 'BEGIN' || verb === 'START') { open = true; transaction = true; }
+    if (['COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'].includes(verb)) {
+      transaction = true;
+      if (!open) throw new Error('Run the complete transaction together using Run all or a selection.');
+      if (['COMMIT', 'END', 'ABORT'].includes(verb) || (verb === 'ROLLBACK' && !words.includes('TO'))) open = words.includes('CHAIN') && !words.includes('NO');
+    }
+  }
+  if (open) throw new Error('Include COMMIT or ROLLBACK and run the complete transaction together.');
+  return { statements: transaction ? [statements.join(';\n') + ';'] : statements, transaction };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { firstSqlVerb, isWriteSql, splitSqlStatements, sqlToRun } from "./sqlConsole.ts";
+import { firstSqlVerb, isWriteSql, splitSqlStatements, sqlToRun, executionUnits } from "./sqlConsole.ts";
 
 describe("SQL console statement selection", () => {
   test("splits scripts without breaking quoted or commented semicolons", () => {
@@ -74,4 +74,24 @@ test('PostgreSQL nested comments preserve statement boundaries and operation cla
   expect(sqlToRun(`${query};`, { from: query.length, to: query.length }, false, 'postgres')).toEqual([query]);
   expect(isWriteSql(query, 'postgres')).toBe(false);
   expect(splitSqlStatements('SELECT 1; /* outer /* inner */ SELECT 2;', 'sqlite')).toHaveLength(2);
+});
+
+
+test('transaction scripts remain one execution unit and incomplete transactions fail before execution', () => {
+  const script = 'BEGIN; UPDATE t SET v=2; SELECT missing FROM t; ROLLBACK;';
+  expect(executionUnits(sqlToRun(script, { from: 0, to: 0 }, true), 'sqlite')).toEqual({ statements: ['BEGIN;\nUPDATE t SET v=2;\nSELECT missing FROM t;\nROLLBACK;'], transaction: true });
+  for (const sql of ['BEGIN', 'COMMIT', 'SAVEPOINT s']) expect(() => executionUnits([sql], 'postgres')).toThrow('transaction');
+});
+
+test('PostgreSQL escape strings retain escaped quotes and semicolons', () => {
+  const first = "SELECT E'it\\'s; ok'";
+  expect(splitSqlStatements(`${first}; SELECT 1;`, 'postgres').map(s => s.sql)).toEqual([first, 'SELECT 1']);
+  expect(isWriteSql(first, 'postgres')).toBe(false);
+});
+
+
+test('transaction chains require a final terminator', () => {
+  expect(() => executionUnits(['BEGIN', 'COMMIT AND CHAIN', 'SELECT 1'], 'postgres')).toThrow('complete transaction');
+  expect(executionUnits(['BEGIN', 'COMMIT AND CHAIN', 'SELECT 1', 'COMMIT'], 'postgres').transaction).toBe(true);
+  expect(executionUnits(['BEGIN', 'ROLLBACK AND NO CHAIN'], 'postgres').transaction).toBe(true);
 });

@@ -1,4 +1,4 @@
-import { splitSqlStatements } from "../src/sqlConsole.ts";
+import { splitSqlStatements, executionUnits } from "../src/sqlConsole.ts";
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -336,4 +336,14 @@ test('SQLite non-nesting comments cannot conceal a migration COMMIT', () => {
   runExec(path, 'CREATE TABLE t (v integer)');
   expect(() => runMigration(path, 'INSERT INTO t VALUES (1); /* outer /* inner */ COMMIT; /* */', false)).toThrow();
   expect(runQuery(path, 'SELECT * FROM t', []).rows).toEqual([]);
+});
+
+
+test('SQL execution retains transaction rollback when a later statement fails', () => {
+  const path = join(dir, 'console-transaction.sqlite');
+  createDatabase(path);
+  runExec(path, 'CREATE TABLE t(v integer); INSERT INTO t VALUES(1)');
+  const units = executionUnits(splitSqlStatements('BEGIN; UPDATE t SET v=2; SELECT missing FROM t; ROLLBACK;').map(s => s.sql), 'sqlite');
+  expect(() => runExec(path, units.statements[0])).toThrow();
+  expect(runQuery(path, 'SELECT v FROM t', []).rows).toEqual([{ v: 1 }]);
 });

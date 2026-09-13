@@ -99,3 +99,11 @@ describe("staged row changes", () => {
     });
   });
 });
+
+test('noncomparable columns cannot become unguarded updates', () => {
+  const table: DbTable = { name: 't', schema: 'public', type: 'table', rowCount: 1, ddl: '', columns: [
+    { name: 'id', type: 'integer', pk: true, notNull: true, fk: null },
+    { name: 'document', type: 'xml', pk: false, notNull: false, fk: null, comparable: false },
+  ] };
+  expect(buildRowChanges(table, [{ id: 1, document: '<old/>' }], { [editKey(0, 'document')]: '<new/>' }, new Set(), [], new Set(['document']))).toEqual([]);
+});

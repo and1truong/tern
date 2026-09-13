@@ -1,3 +1,4 @@
+import { executionUnits, splitSqlStatements } from "../src/sqlConsole.ts";
 import { serializeRows } from "../src/dataTransfer.ts";
 import { compileGroup } from "../src/dbFilter.ts";
 import { describe, test, expect } from "bun:test";
@@ -101,6 +102,16 @@ pgDescribe("pgServer (live)", () => {
         { id: 12, serial_id: 2, amount: 7, doubled: 14 },
       ]);
     } finally { await runPgExec(url, 'DROP SCHEMA pgserver_defaults_test CASCADE'); }
+  });
+
+  test("console transaction scripts roll back on failure on one connection", async () => {
+    await runPgExec(url, 'CREATE TABLE public.pgserver_transaction_test(v integer); INSERT INTO public.pgserver_transaction_test VALUES(1)');
+    try {
+      const script = 'BEGIN; UPDATE public.pgserver_transaction_test SET v=2; SELECT missing FROM public.pgserver_transaction_test; ROLLBACK;';
+      const units = executionUnits(splitSqlStatements(script, 'postgres').map(s => s.sql), 'postgres');
+      await expect(runPgExec(url, units.statements[0])).rejects.toThrow();
+      expect((await runPgQuery(url, 'SELECT v FROM public.pgserver_transaction_test', [])).rows).toEqual([{ v: 1 }]);
+    } finally { await runPgExec(url, 'DROP TABLE public.pgserver_transaction_test'); }
   });
 
   test("dotted relation names stay separate and noncomparable filters execute", async () => {
