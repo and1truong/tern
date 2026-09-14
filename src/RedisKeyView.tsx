@@ -4,11 +4,12 @@ import type { KeyInspection } from "../shared.ts";
 
 // Type-aware viewer/editor for one Redis key. Edits are explicit actions
 // (never implicit), and the server still enforces read-only sessions.
-export function RedisKeyView({ source, keyName, writable, onChanged }: {
+export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }: {
   source: RedisSource;
   keyName: string;
   writable: boolean;
   onChanged?(): void;
+  onRenamed?(newKey: string): void;
 }) {
   const [inspection, setInspection] = useState<KeyInspection | null>(null);
   const [error, setError] = useState('');
@@ -41,7 +42,8 @@ export function RedisKeyView({ source, keyName, writable, onChanged }: {
       const result = await dbApi.datasource.keyOp(source, op);
       if (!result.ok) setError(result.error ?? 'Operation failed');
       else { setStringDraft(null); onChanged?.(); await load(); }
-    } catch (e) { setError(String(e)); }
+      return result;
+    } catch (e) { setError(String(e)); return null; }
     finally { setBusy(false); }
   };
 
@@ -56,7 +58,13 @@ export function RedisKeyView({ source, keyName, writable, onChanged }: {
       <span className="mono text-[10px] uppercase text-[var(--muted)]">{inspection.type}</span>
       <span className="text-xs text-[var(--text-muted)]">TTL {ttl}{inspection.size !== null ? ` · size ${inspection.size}` : ''}{inspection.memoryBytes !== null ? ` · ${inspection.memoryBytes} B` : ''}</span>
       <span className="ml-auto flex gap-1 items-center">
-        {renamed && <span className="flex gap-1"><input aria-label="New key name" value={renamed.to} onChange={e => setRenamed({ to: e.target.value })} className="bg-[var(--bg)] border border-[var(--border)] p-1 text-xs" /><button className="primary text-xs" disabled={busy} onClick={() => void mutate({ op: 'rename', from: keyName, to: renamed.to }).then(() => setRenamed(null))}>Rename</button><button className="text-xs" onClick={() => setRenamed(null)}>×</button></span>}
+        {renamed && <span className="flex gap-1"><input aria-label="New key name" value={renamed.to} onChange={e => setRenamed({ to: e.target.value })} className="bg-[var(--bg)] border border-[var(--border)] p-1 text-xs" /><button className="primary text-xs" disabled={busy} onClick={() => {
+          const to = renamed.to;
+          void mutate({ op: 'rename', from: keyName, to }).then(result => {
+            setRenamed(null);
+            if (result?.ok) onRenamed?.(to);   // retarget this document at the new key
+          });
+        }}>Rename</button><button className="text-xs" onClick={() => setRenamed(null)}>×</button></span>}
         {!renamed && writable && <button disabled={busy} onClick={() => setRenamed({ to: keyName })}>Rename</button>}
         {writable && <span className="flex gap-1 items-center"><input aria-label="Expire seconds" type="number" min="1" value={expiresIn} onChange={e => setExpiresIn(e.target.value)} className="w-20 bg-[var(--bg)] border border-[var(--border)] p-1 text-xs" /><button disabled={busy} onClick={() => void mutate({ op: 'expire', key: keyName, seconds: Number(expiresIn) })}>Expire</button><button disabled={busy} onClick={() => void mutate({ op: 'persist', key: keyName })}>Persist</button></span>}
         {confirmDelete ? <span className="flex gap-1"><button className="primary text-xs" disabled={busy} onClick={() => void mutate({ op: 'delete', keys: [keyName] })}>Confirm delete</button><button className="text-xs" onClick={() => setConfirmDelete(false)}>Cancel</button></span>
@@ -69,10 +77,10 @@ export function RedisKeyView({ source, keyName, writable, onChanged }: {
       {v.kind === 'none' && <p className="text-sm text-[var(--text-muted)]">This key does not exist (it may have expired).</p>}
       {v.kind === 'unknown' && <p className="text-sm text-[var(--text-muted)]">{v.note}</p>}
       {v.kind === 'string' && <div className="space-y-2">
-        <textarea readOnly={!writable} value={stringDraft ?? v.value} onChange={e => setStringDraft(e.target.value)}
+        <textarea readOnly={!writable || v.truncated} value={stringDraft ?? v.value} onChange={e => setStringDraft(e.target.value)}
           rows={6} className="w-full bg-[var(--bg)] border border-[var(--border)] p-2 font-mono text-xs" />
-        <p className="text-xs text-[var(--faint)]">{v.lengthBytes} bytes{v.truncated ? ' · preview truncated' : ''}{writable && stringDraft === null ? ' · click into the text to edit' : ''}</p>
-        {writable && stringDraft !== null && <div className="flex gap-1">
+        <p className="text-xs text-[var(--faint)]">{v.lengthBytes} bytes{v.truncated ? ' · preview truncated — editing disabled; edit via GET/SET in the console' : ''}{!v.truncated && writable && stringDraft === null ? ' · click into the text to edit' : ''}</p>
+        {writable && !v.truncated && stringDraft !== null && <div className="flex gap-1">
           <button className="primary text-xs" disabled={busy} onClick={() => void mutate({ op: 'setString', key: keyName, value: stringDraft })}>Save value</button>
           <button className="text-xs" onClick={() => setStringDraft(null)}>Revert</button>
         </div>}

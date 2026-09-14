@@ -204,7 +204,7 @@ export const commandCatalog: CommandDoc[] = [
   { name: "MONITOR", group: "server", arity: 1, summary: "Stream every command the server processes", since: "1.0.0", access: "admin", danger: "admin", notes: "Degrades server performance; holds the connection forever." },
   { name: "SLAVEOF", group: "server", arity: 3, summary: "Make the server a replica of another, or stop replicating (deprecated alias of REPLICAOF)", since: "1.0.0", access: "admin", danger: "admin", args: [{ name: "host", type: "string" }, { name: "port", type: "string" }] },
   { name: "REPLICAOF", group: "server", arity: 3, summary: "Make the server a replica of another, or stop replicating", since: "5.0.0", access: "admin", danger: "admin", args: [{ name: "host", type: "string" }, { name: "port", type: "string" }] },
-  { name: "WAIT", group: "server", arity: 3, summary: "Wait for the previous writes to reach N replicas", since: "3.0.0", access: "read", args: [{ name: "numreplicas", type: "int" }, { name: "timeout", type: "int", description: "Milliseconds; 0 waits indefinitely" }], returns: "Replicas that acknowledged the writes." },
+  { name: "WAIT", group: "server", arity: 3, summary: "Wait for the previous writes to reach N replicas", since: "3.0.0", access: "read", blocking: true, args: [{ name: "numreplicas", type: "int" }, { name: "timeout", type: "int", description: "Milliseconds; 0 waits indefinitely" }], returns: "Replicas that acknowledged the writes.", notes: "Holds the connection; timeout 0 blocks forever." },
   { name: "LOLWUT", group: "server", arity: -1, summary: "Display the server version as computer art", since: "5.0.0", access: "read" },
 
   // --- scripting ---
@@ -255,6 +255,11 @@ export function blockingTimeoutSeconds(doc: CommandDoc, args: string[]): number 
     const idx = args.findIndex(a => a.toUpperCase() === "BLOCK");
     if (idx === -1 || idx + 1 >= args.length) return null;
     const ms = Number(args[idx + 1]);
+    return Number.isFinite(ms) ? ms / 1000 : null;
+  }
+  // WAIT's timeout is milliseconds on the trailing argument.
+  if (doc.name === "WAIT") {
+    const ms = Number(args.at(-1));
     return Number.isFinite(ms) ? ms / 1000 : null;
   }
   const position = BLOCKING_TIMEOUT[doc.name];

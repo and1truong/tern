@@ -56,3 +56,9 @@ describe("lintCommand", () => {
     expect(warning!.severity).toBe("info");
   });
 });
+
+test("WAIT with timeout 0 is flagged as indefinite blocking", () => {
+  const [warning] = lintCommand("WAIT 1 0", noCluster);
+  expect(warning!.rule).toBe("blocking-indefinite");
+  expect(lintCommand("WAIT 1 2000", noCluster).find(w => w.rule === "blocking-indefinite")).toBeUndefined();
+});

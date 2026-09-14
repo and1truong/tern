@@ -55,3 +55,12 @@ describe("command catalog integrity", () => {
     expect(commandKeys(lookupCommand("SET")!, ["k", "v", "EX", "10"])).toEqual(["k"]);
   });
 });
+
+describe("WAIT blocking classification", () => {
+  test("WAIT is blocking with a millisecond timeout", () => {
+    const wait = lookupCommand("WAIT")!;
+    expect(wait.blocking).toBe(true);
+    expect(blockingTimeoutSeconds(wait, ["1", "0"])).toBe(0);
+    expect(blockingTimeoutSeconds(wait, ["1", "2000"])).toBe(2);
+  });
+});

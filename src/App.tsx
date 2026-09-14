@@ -124,6 +124,9 @@ export function App() {
     setTabs(prev => prev.filter(t => t.id !== doc.id));
     if (active === doc.id) setActive(tabs.find(t => t.id !== doc.id)?.id ?? '');
   };
+  const retargetKey = (docId: string, newKey: string) => {
+    setTabs(prev => prev.map(d => d.id === docId && d.kind === 'key' ? { ...d, table: newKey, title: `Key ${newKey}` } : d));
+  };
   const changeAccess = async (target: DbSource, enabled: boolean) => {
     setAccessBusy(true); setError('');
     try {
@@ -192,7 +195,7 @@ export function App() {
       <section className="document-area">
         <div className="document-tabs" role="tablist">{tabs.map(doc => <div key={doc.id} className={`document-tab ${doc.id === active ? 'selected' : ''}`}><button role="tab" aria-selected={doc.id === active} title={`${doc.title} — ${sourceLabel(doc.source)}`} onClick={() => { setActive(doc.id); setSelected(doc.source); }}>{doc.kind === 'sql' ? <Terminal size={13}/> : doc.kind === 'diagram' ? <Network size={13}/> : doc.kind === 'insights' ? <Activity size={13}/> : <FileCode size={13}/>} {doc.title}{dirty[doc.id] && ' ●'}</button><button aria-label={`Close ${doc.title}`} onClick={() => close(doc)}>×</button></div>)}<button aria-label="New SQL document" disabled={!source} onClick={() => open('sql')}>+</button></div>
         {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite · PostgreSQL · Redis / Valkey workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button><button onClick={() => setPicker('redis')}>New Redis connection</button>{source && <><button onClick={() => open(source.kind === 'redis' ? 'console' : 'sql')}>New {source.kind === 'redis' ? 'console' : 'SQL'} document <kbd>⌘N</kbd></button><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}
-        {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} info={infos[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={setDirty} onLatency={setLatency} onRefresh={() => void connect(doc.source)} />)}
+        {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} info={infos[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={setDirty} onLatency={setLatency} onRefresh={() => void connect(doc.source)} onRetargetKey={retargetKey} />)}
       </section>
     </div>
     {accessTarget && <dialog ref={accessDialog} aria-labelledby="access-title" className="connection-dialog" onCancel={event => { if (accessBusy) event.preventDefault(); else setAccessTarget(null); }}>
@@ -216,15 +219,16 @@ export function App() {
   </main>;
 }
 
-function DocumentView({ doc, visible, schema, info, writable, onDirty, onLatency, onRefresh }: {
+function DocumentView({ doc, visible, schema, info, writable, onDirty, onLatency, onRefresh, onRetargetKey }: {
   doc: Document; visible: boolean; schema?: DbSchema; info?: DataSourceInfo; writable: boolean;
   onDirty: React.Dispatch<React.SetStateAction<Record<string, boolean>>>; onLatency: (ms: number) => void; onRefresh: () => void;
+  onRetargetKey(docId: string, newKey: string): void;
 }) {
   const dirty = useCallback((value: boolean) => onDirty(s => s[doc.id] === value ? s : { ...s, [doc.id]: value }), [doc.id, onDirty]);
   const table = schema?.tables.find(t => tableKey(t) === doc.table);
   if (doc.source.kind === 'redis') {
     return <div role="tabpanel" className={visible ? 'document-body' : 'hidden'}>
-      {doc.kind === 'key' && (doc.table ? <RedisKeyView source={doc.source} keyName={doc.table} writable={writable} onChanged={onRefresh}/> : <div className="p-4">No key selected.</div>)}
+      {doc.kind === 'key' && (doc.table ? <RedisKeyView source={doc.source} keyName={doc.table} writable={writable} onChanged={onRefresh} onRenamed={newKey => onRetargetKey(doc.id, newKey)}/> : <div className="p-4">No key selected.</div>)}
       {doc.kind === 'console' && <RedisConsole docId={doc.id} source={doc.source} info={info ?? null} writable={writable} onDirty={dirty} onLatency={onLatency}/>}
       {doc.kind !== 'key' && doc.kind !== 'console' && <div className="p-4 text-[var(--text-muted)]">This document type is not available for Redis connections.</div>}
     </div>;

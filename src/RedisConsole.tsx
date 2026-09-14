@@ -7,6 +7,7 @@ import { completeCommand, argumentHint } from "../datasources/redis/autocomplete
 import { explainCommand, type CommandExplanation } from "../datasources/redis/explain.ts";
 import { lintCommand } from "../datasources/redis/lint.ts";
 import { boundConsoleHistory } from "./consoleHistory.ts";
+import { redactSensitive } from "./redisRedact.ts";
 
 interface HistoryEntry { command: string; at: number }
 interface SavedConsole { input: string; history: HistoryEntry[]; favorites: string[] }
@@ -80,9 +81,17 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
     }).catch(e => setError(String(e)));
   }, [storageKey]);
   useEffect(() => () => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (saveTimer.current) { clearTimeout(saveTimer.current); void dbApi.state.set(storageKey, stash(latest.current)).catch(() => {}); }
     if (keyFetchTimer.current) clearTimeout(keyFetchTimer.current);
   }, [storageKey]);
+
+  // In-memory state keeps what the user typed; only the persisted copy is
+  // redacted, so credentials never reach plaintext app state.
+  const stash = (s: SavedConsole): SavedConsole => ({
+    input: redactSensitive(s.input),
+    history: s.history.map(h => ({ ...h, command: redactSensitive(h.command) })),
+    favorites: s.favorites.map(f => redactSensitive(f)),
+  });
 
   const persist = (next: SavedConsole) => {
     next = boundConsoleHistory(next);
@@ -92,7 +101,7 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
     onDirty(true);
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
-      void dbApi.state.set(storageKey, next).then(() => { if (version === saveVersion.current) onDirty(false); }).catch(e => setError(String(e)));
+      void dbApi.state.set(storageKey, stash(next)).then(() => { if (version === saveVersion.current) onDirty(false); }).catch(e => setError(String(e)));
     }, 250);
   };
 

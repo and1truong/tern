@@ -370,3 +370,13 @@ describe("codex round 2 regressions", () => {
     expect(closed).toBe(true);
   });
 });
+
+describe("codex round 3 regressions", () => {
+  test("WAIT 1 0 is refused by the console guard", async () => {
+    const { factory } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const refused = await session.console!.exec("WAIT 1 0", { writable: true });
+    expect(refused.reply.t).toBe("err");
+    expect(String((refused.reply as { s: string }).s)).toMatch(/indefinitely/);
+  });
+});
