@@ -99,7 +99,9 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
         if (path === "/insights") return h.insights(url, req.signal);
       }
       if (req.method !== "POST") return fail("Not found", 404);
-      if ((["/exec", "/rows/apply", "/migration/apply"].includes(path) || (path === "/migration/preview" && body.connId)) && !writable.has(accessKey)) return fail("Connection is read-only", 403);
+      // /exec with allowWrite !== true is the read-only batch path: the runner
+      // validates the script and enforces read-only execution in the engine.
+      if ((["/rows/apply", "/migration/apply"].includes(path) || (path === "/migration/preview" && body.connId) || (path === "/exec" && body.allowWrite === true)) && !writable.has(accessKey)) return fail("Connection is read-only", 403);
       const forwarded = new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body), signal: req.signal });
       if (path === "/migration/preview") {
         validated.delete(accessKey);

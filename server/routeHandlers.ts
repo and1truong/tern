@@ -109,16 +109,17 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
     },
 
     // POST /exec  body { path? | connId?, sql }
+    // allowWrite !== true runs the script as a read-only batch without write access.
     async exec(req: Request): Promise<Response> {
       let b: { path?: string; connId?: string; database?: string; sql?: string; allowWrite?: boolean; timeoutMs?: number };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       try {
-        if (b.allowWrite !== true) throw new DbError("not_read_only", "write execution requires explicit confirmation");
+        const readOnly = b.allowWrite !== true;
         if (b.connId) {
-          await assertPgWritable(b.connId, b.database);
-          return Response.json(await runPgExec(await resolvePgUrl(b.connId, b.database), b.sql ?? "", req.signal, b.timeoutMs));
+          if (!readOnly) await assertPgWritable(b.connId, b.database);
+          return Response.json(await runPgExec(await resolvePgUrl(b.connId, b.database), b.sql ?? "", req.signal, b.timeoutMs, readOnly));
         }
-        return Response.json(await sqliteTask({ operation: "exec", args: [b.path ?? "", b.sql ?? ""] }, req.signal, b.timeoutMs));
+        return Response.json(await sqliteTask({ operation: "exec", args: [b.path ?? "", b.sql ?? "", readOnly] }, req.signal, b.timeoutMs));
       } catch (e) { return dbErrorResponse(e); }
     },
 

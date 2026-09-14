@@ -96,7 +96,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     let units: ReturnType<typeof executionUnits>;
     try { units = executionUnits(sqlToRun(active.sql, selection, all, source.kind), source.kind); }
     catch (e) { setError(String(e)); return; }
-    const { statements, transaction } = units;
+    const { statements, transaction, readOnly } = units;
     if (!statements.length) return;
     setBusy(true); setError(null); setOutputs([]); setActiveOutput(0);
     const abort = new AbortController();
@@ -104,18 +104,20 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     const nextOutputs: StatementOutput[] = [];
     let nextConsole = consoleState;
     let wrote = false;
+    // Transaction batches of reads run as one script without write access.
+    const readOnlyBatch = transaction && readOnly;
     for (const statement of statements) {
       if (abort.signal.aborted) break;
       const started = performance.now();
       const isWrite = forceWrite || transaction || isWriteSql(statement, source.kind);
-      if (isWrite && !writable) {
+      if (isWrite && !readOnlyBatch && !writable) {
         nextOutputs.push({ sql: statement, error: "Read-only mode: enable Writable before running this statement." });
         break;
       }
       try {
         let output: StatementOutput;
         if (isWrite) {
-          const exec = await dbApi.exec(source, statement, true, abort.signal, timeoutMs);
+          const exec = await dbApi.exec(source, statement, !readOnlyBatch, abort.signal, timeoutMs);
           output = { sql: statement, exec, result: exec.result };
           wrote = true;
         } else {

@@ -130,6 +130,34 @@ export function assertReadOnlySql(sql: string, dialect: "sqlite" | "postgres" = 
   return normalized;
 }
 
+const TRANSACTION_VERBS = new Set(["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE", "ABORT"]);
+
+// A multi-statement script whose every statement is a read or plain
+// transaction control; the write path of /exec runs these without write access.
+export function assertReadOnlyScript(sql: string, dialect: "sqlite" | "postgres" = "postgres"): void {
+  const trimmed = sql.trim();
+  const scanned = scanSqlTokens(trimmed, dialect);
+  const statements: string[] = [];
+  let start = 0;
+  for (const token of scanned) {
+    if (token.value !== ";") continue;
+    if (trimmed.slice(start, token.start).trim()) statements.push(trimmed.slice(start, token.start));
+    start = token.end;
+  }
+  if (trimmed.slice(start).trim()) statements.push(trimmed.slice(start));
+  if (!statements.length) throw new DbError("not_read_only", "statement is empty");
+  for (const statement of statements) {
+    const tokens = sqlTokens(statement, dialect);
+    if (TRANSACTION_VERBS.has(tokens[0] ?? "")) {
+      if ((tokens[0] === "BEGIN" || tokens[0] === "START") && tokens.includes("WRITE")) {
+        throw new DbError("not_read_only", "read-only script contains BEGIN READ WRITE");
+      }
+      continue;
+    }
+    assertReadOnlySql(statement, dialect);
+  }
+}
+
 export function boundReadSql(sql: string, limit: number, offset = 0, dialect: "sqlite" | "postgres" = "postgres"): string {
   const normalized = assertReadOnlySql(sql, dialect);
   const verb = sqlTokens(normalized, dialect)[0];

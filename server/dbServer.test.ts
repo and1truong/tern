@@ -208,6 +208,16 @@ describe("runExec", () => {
     seed(path);
     expect(() => runExec(path, "INSERT INTO posts (id, user_id) VALUES (1, 999)")).toThrow(DbError);
   });
+
+  test("read-only mode runs read transactions and refuses writes", () => {
+    const path = join(dir, "app.db");
+    seed(path);
+    const r = runExec(path, "BEGIN; SELECT COUNT(*) FROM users; COMMIT", true);
+    expect(r.rowsAffected).toBeNull();
+    expect(() => runExec(path, "BEGIN; UPDATE users SET age = 1; COMMIT", true)).toThrow(DbError);
+    expect(runQuery(path, "SELECT COUNT(*) AS n FROM users WHERE age = 1", [], 10).rows[0].n).toBe(0);
+    expect(() => runExec(path, "CREATE TABLE ro_nope (id); SELECT 1", true)).toThrow(DbError);
+  });
 });
 
 describe("runMigration", () => {

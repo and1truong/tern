@@ -6,7 +6,7 @@ import { join, isAbsolute, normalize } from "node:path";
 import { homedir } from "node:os";
 import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, DatabaseInsights, MigrationResult } from "../shared.ts";
 import { DbError } from "../shared.ts";
-import { assertReadOnlySql, boundReadSql, normalizeSingleStatement, sqlTokens } from "./sqlSafety.ts";
+import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, normalizeSingleStatement, sqlTokens } from "./sqlSafety.ts";
 import { compileRowChanges } from "./rowMutations.ts";
 import { encodeDbValue } from "../binaryValues.ts";
 export { DbError } from "../shared.ts";
@@ -220,9 +220,11 @@ export function explainQuery(pathRaw: string, sql: string, params: unknown[]): Q
   } finally { db.close(); }
 }
 
-export function runExec(pathRaw: string, sql: string): ExecResult {
+export function runExec(pathRaw: string, sql: string, readOnly = false): ExecResult {
+  if (readOnly) assertReadOnlyScript(sql, "sqlite");
   const db = openWrite(resolvePath(pathRaw), true);
   try {
+    if (readOnly) db.exec("PRAGMA query_only = on");
     const t0 = performance.now();
     let rowsAffected: number | null = 0;
     let result: QueryResult | undefined;

@@ -609,3 +609,17 @@ test.skipIf(!process.env.TEST_PG_URL)("PostgreSQL export uses one bounded result
   expect(result.hasMore).toBe(false);
   expect((await runPgQuery(url, sql, [100_001], undefined, undefined, undefined, undefined, true)).hasMore).toBe(true);
 });
+
+test.skipIf(!PG)("read-only exec runs read transactions and refuses writes", async () => {
+  const url = PG!;
+  const T = "pgserver_test_t";
+  await runPgExec(url, `CREATE TABLE IF NOT EXISTS ${T} (id integer)`);
+  try {
+    const r = await runPgExec(url, `BEGIN READ ONLY; SELECT COUNT(*) FROM ${T}; COMMIT`, undefined, undefined, true);
+    expect(r.rowsAffected).toBe(0);
+    await expect(runPgExec(url, `BEGIN; INSERT INTO ${T} VALUES (1); COMMIT`, undefined, undefined, true)).rejects.toThrow(DbError);
+    expect((await runPgQuery(url, `SELECT COUNT(*)::int AS n FROM ${T}`, [])).rows[0].n).toBe(0);
+    await expect(runPgExec(url, "BEGIN READ WRITE; SELECT 1; COMMIT", undefined, undefined, true)).rejects.toThrow(DbError);
+    await expect(runPgExec(url, "SET default_transaction_read_only = off; SELECT 1", undefined, undefined, true)).rejects.toThrow(DbError);
+  } finally { await runPgExec(url, `DROP TABLE IF EXISTS ${T}`); }
+});

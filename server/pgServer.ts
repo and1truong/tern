@@ -5,7 +5,7 @@ import { validateMigrationSql } from "./migrationSafety.ts";
 // extra dependency. Connections are opened per request and closed in a finally,
 // matching dbServer.ts's open-on-each-call SQLite pattern — no pool to manage.
 import { SQL } from "bun";
-import { assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
+import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
 import { awaitControlled, type CancellableQuery } from "./queryControl.ts";
 import { compileRowChanges, toPostgresMutationSql } from "./rowMutations.ts";
 import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared.ts";
@@ -671,10 +671,12 @@ export async function explainPgQuery(
   }
 }
 
-export async function runPgExec(url: string, sql: string, signal?: AbortSignal, timeoutMs = 30_000): Promise<ExecResult> {
+export async function runPgExec(url: string, sql: string, signal?: AbortSignal, timeoutMs = 30_000, readOnly = false): Promise<ExecResult> {
+  if (readOnly) assertReadOnlyScript(sql);
   const db = await open(url);
   const connection = await db.reserve();
   try {
+    if (readOnly) await connection.unsafe("SET default_transaction_read_only = on");
     const t0 = performance.now();
     let rowsAffected = 0;
     let result: QueryResult | undefined;

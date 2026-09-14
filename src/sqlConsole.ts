@@ -203,15 +203,18 @@ function isWriteWords(words: string[], dialect: Dialect): boolean {
 }
 
 
-export function executionUnits(statements: string[], dialect: Dialect): { statements: string[]; transaction: boolean } {
+export function executionUnits(statements: string[], dialect: Dialect): { statements: string[]; transaction: boolean; readOnly: boolean } {
   let open = false;
   let transaction = false;
   let explicitBegin = false;
+  let wrote = false;
   const savepoints: string[] = [];
+  const control = ['BEGIN', 'START', 'COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'];
   for (const statement of statements) {
     const words = structuralWords(statement, dialect);
     const namedWords = structuralWords(statement, dialect, true);
     const verb = words[0];
+    if (!control.includes(verb) && isWriteSql(statement, dialect)) wrote = true;
     if (verb === 'BEGIN' || verb === 'START') { open = true; explicitBegin = true; transaction = true; }
     if (['COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'].includes(verb)) {
       transaction = true;
@@ -234,5 +237,5 @@ export function executionUnits(statements: string[], dialect: Dialect): { statem
   }
   if (open) throw new Error('Include COMMIT or ROLLBACK and run the complete transaction together.');
   const batch = transaction || (statements.length > 1 && statements.some(statement => isWriteSql(statement, dialect)));
-  return { statements: batch ? [statements.join(';\n') + ';'] : statements, transaction: batch };
+  return { statements: batch ? [statements.join(';\n') + ';'] : statements, transaction: batch, readOnly: !wrote };
 }

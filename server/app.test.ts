@@ -59,5 +59,8 @@ test("standalone API persists state and recent files, denies implicit access/wri
     expect((await recent.json()).databases[0].path).toBe(path);
     await post('open', { path });
     expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
+    expect((await post('exec', { path, sql: 'BEGIN; SELECT * FROM users; COMMIT' })).status).toBe(200);
+    expect((await post('exec', { path, sql: 'BEGIN; DELETE FROM users; COMMIT' })).status).toBe(400);
+    expect((await post('exec', { path, sql: 'SELECT COUNT(*) AS n FROM users' })).status).toBe(200);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

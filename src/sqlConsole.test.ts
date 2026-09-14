@@ -79,8 +79,16 @@ test('PostgreSQL nested comments preserve statement boundaries and operation cla
 
 test('transaction scripts remain one execution unit and incomplete transactions fail before execution', () => {
   const script = 'BEGIN; UPDATE t SET v=2; SELECT missing FROM t; ROLLBACK;';
-  expect(executionUnits(sqlToRun(script, { from: 0, to: 0 }, true), 'sqlite')).toEqual({ statements: ['BEGIN;\nUPDATE t SET v=2;\nSELECT missing FROM t;\nROLLBACK;'], transaction: true });
+  expect(executionUnits(sqlToRun(script, { from: 0, to: 0 }, true), 'sqlite')).toEqual({ statements: ['BEGIN;\nUPDATE t SET v=2;\nSELECT missing FROM t;\nROLLBACK;'], transaction: true, readOnly: false });
   for (const sql of ['BEGIN', 'COMMIT', 'SAVEPOINT s']) expect(() => executionUnits([sql], 'postgres')).toThrow('transaction');
+});
+
+test('read-only transaction batches skip the writable requirement', () => {
+  expect(executionUnits(['BEGIN READ ONLY', 'SELECT 1', 'COMMIT'], 'postgres')).toEqual({ statements: ['BEGIN READ ONLY;\nSELECT 1;\nCOMMIT;'], transaction: true, readOnly: true });
+  expect(executionUnits(['BEGIN', 'SELECT 1', 'COMMIT'], 'sqlite')).toEqual({ statements: ['BEGIN;\nSELECT 1;\nCOMMIT;'], transaction: true, readOnly: true });
+  expect(executionUnits(['BEGIN', "SELECT replace('abc', 'a', 'z')", 'COMMIT'], 'sqlite').readOnly).toBe(true);
+  expect(executionUnits(['BEGIN', 'UPDATE t SET v=1', 'COMMIT'], 'sqlite').readOnly).toBe(false);
+  expect(executionUnits(['BEGIN', 'PRAGMA user_version = 7', 'COMMIT'], 'sqlite').readOnly).toBe(false);
 });
 
 test('PostgreSQL escape strings retain escaped quotes and semicolons', () => {
@@ -143,7 +151,7 @@ test('SQLite dollar parameters do not swallow statement boundaries', () => {
 });
 
 test('stateful writable batches stay on one execution connection', () => {
-  expect(executionUnits(['CREATE TEMP TABLE t(id integer)', 'SELECT * FROM t'], 'sqlite')).toEqual({ statements: ['CREATE TEMP TABLE t(id integer);\nSELECT * FROM t;'], transaction: true });
+  expect(executionUnits(['CREATE TEMP TABLE t(id integer)', 'SELECT * FROM t'], 'sqlite')).toEqual({ statements: ['CREATE TEMP TABLE t(id integer);\nSELECT * FROM t;'], transaction: true, readOnly: false });
   expect(executionUnits(['SET search_path TO app', 'SELECT * FROM t'], 'postgres').statements).toHaveLength(1);
   expect(executionUnits(['SELECT 1', 'SELECT 2'], 'postgres').transaction).toBe(false);
 });

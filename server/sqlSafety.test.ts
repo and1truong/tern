@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
+import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
 import { DbError } from "../shared.ts";
 
 describe("SQL read-only safety", () => {
@@ -68,4 +68,34 @@ test('ordinary backslashes cannot conceal a transaction command', () => {
 test('PostgreSQL TABLE shorthand uses bounded read queries', () => {
   expect(boundReadSql('TABLE public.users', 5, 2, 'postgres')).toBe('SELECT * FROM (TABLE public.users\n) AS "__tern_query" LIMIT 6 OFFSET 2');
   expect(() => assertReadOnlySql('TABLE public.users', 'sqlite')).toThrow();
+});
+
+describe("assertReadOnlyScript", () => {
+  test("allows transaction batches of reads", () => {
+    expect(() => assertReadOnlyScript("BEGIN READ ONLY; SELECT 1; COMMIT", "postgres")).not.toThrow();
+    expect(() => assertReadOnlyScript("BEGIN; SELECT 1; SELECT 2; COMMIT;", "sqlite")).not.toThrow();
+    expect(() => assertReadOnlyScript("START TRANSACTION ISOLATION LEVEL SERIALIZABLE; SHOW search_path; COMMIT", "postgres")).not.toThrow();
+  });
+
+  test("rejects write statements anywhere in the script", () => {
+    expect(() => assertReadOnlyScript("BEGIN; INSERT INTO t VALUES (1); COMMIT")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("SELECT 1; DELETE FROM t")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("BEGIN; PRAGMA user_version = 7; COMMIT", "sqlite")).toThrow(DbError);
+  });
+
+  test("rejects read-write transaction starts", () => {
+    expect(() => assertReadOnlyScript("BEGIN READ WRITE; SELECT 1; COMMIT")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("START TRANSACTION READ WRITE; COMMIT", "postgres")).toThrow(DbError);
+  });
+
+  test("semicolons in strings, comments, and E-strings do not split statements", () => {
+    expect(() => assertReadOnlyScript("SELECT E'a;b' AS v; SELECT 1", "postgres")).not.toThrow();
+    expect(() => assertReadOnlyScript("/* one; two */ SELECT 'three; four'")).not.toThrow();
+    expect(() => assertReadOnlyScript("SELECT E'a;b'; DELETE FROM t")).toThrow(DbError);
+  });
+
+  test("rejects empty scripts", () => {
+    expect(() => assertReadOnlyScript(";;")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("")).toThrow(DbError);
+  });
 });
