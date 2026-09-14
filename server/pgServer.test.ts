@@ -580,6 +580,25 @@ pgDescribe("pgServer (live)", () => {
     } finally { await runPgExec(url, 'DROP SCHEMA tern_empty_test CASCADE'); }
   });
 
+  test("materialized view DDL replays its indexes for concurrent refresh", async () => {
+    await runPgExec(url, 'CREATE SCHEMA tern_matview_index_test');
+    try {
+      await runPgExec(url, `CREATE MATERIALIZED VIEW tern_matview_index_test.summary AS SELECT n FROM generate_series(1, 5) AS n`);
+      const before = await readPgSchema(url);
+      const view = before.tables.find(t => t.schema === 'tern_matview_index_test' && t.name === 'summary')!;
+      expect(view.ddl).not.toContain('CREATE UNIQUE INDEX');
+      await runPgExec(url, `CREATE UNIQUE INDEX summary_n_key ON tern_matview_index_test.summary (n); CREATE INDEX summary_scan ON tern_matview_index_test.summary ((n * 2))`);
+      const schema = await readPgSchema(url);
+      const indexed = schema.tables.find(t => t.schema === 'tern_matview_index_test' && t.name === 'summary')!;
+      expect(indexed.ddl).toContain('CREATE UNIQUE INDEX summary_n_key');
+      expect(indexed.ddl).toContain('CREATE INDEX summary_scan');
+      await runPgExec(url, 'DROP MATERIALIZED VIEW tern_matview_index_test.summary');
+      await runPgExec(url, indexed.ddl);
+      await runPgExec(url, 'REFRESH MATERIALIZED VIEW CONCURRENTLY tern_matview_index_test.summary');
+      expect((await runPgQuery(url, 'SELECT COUNT(*)::int AS n FROM tern_matview_index_test.summary', [])).rows[0].n).toBe(5);
+    } finally { await runPgExec(url, 'DROP SCHEMA tern_matview_index_test CASCADE'); }
+  });
+
   test("query refuses write statements", async () => {
     await expect(runPgQuery(url, `DELETE FROM ${T}`, [], 100)).rejects.toBeInstanceOf(DbError);
   });

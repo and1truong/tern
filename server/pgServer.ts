@@ -466,6 +466,8 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     for (const t of tables) {
       if (t.type === "materialized_view") {
         t.ddl = materializedDdl.get(`${t.schema}\0${t.name}`) ?? "";
+        // Unique indexes carry CONCURRENTLY refresh; plain indexes carry reads.
+        for (const index of idx.filter(index => index.schema === t.schema && index.table_name === t.name && !index.constraint_backed)) t.ddl += `\n${index.sql};`;
         continue;
       }
       if (t.type === "view") {
