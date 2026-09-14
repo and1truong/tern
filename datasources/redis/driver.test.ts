@@ -227,7 +227,7 @@ describe("explorer inspect", () => {
 
     const legacy = makeFake(INFO_REDIS5, (command, args) => {
       if (command === "XRANGE") {
-        expect(args).toEqual(["st", "5-1", "+", "COUNT", "51"]);
+        expect(args).toEqual(["st", "5-1", "+", "COUNT", "52"]);
         return [["5-1", ["f", "v"]], ["6-1", ["f", "w"]]];
       }
       return baseResponder(command, args, []);
@@ -318,5 +318,55 @@ describe("stream paging regression", () => {
     const next = await session.explorer!.inspect("st", page.value.lastId!);
     if (next.value.kind !== "stream") throw new Error("expected stream value");
     expect(next.value.entries[0]!.id).toBe("51-1");
+  });
+});
+
+describe("codex round 2 regressions", () => {
+  test("legacy stream paging fetches cursor + page + probe, so 100+ entry streams keep going", async () => {
+    // Cursor entry 5-1 plus 51 NEW entries: legacy needs COUNT 52 to see the probe.
+    const ids = Array.from({ length: 51 }, (_, i) => `${i + 6}-1`);
+    const { factory } = makeFake(INFO_REDIS5, (command, args) => {
+      if (command === "XRANGE") {
+        expect(args).toEqual(["st", "5-1", "+", "COUNT", "52"]);
+        return [["5-1", ["f", "x"]], ...ids.map(id => [id, ["f", "v"]])];
+      }
+      if (command === "TTL") return -1;
+      if (command === "MEMORY") return 0;
+      if (command === "XLEN") return 56;
+      if (command === "TYPE") return "stream";
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const page = await session.explorer!.inspect("st", "5-1");
+    if (page.value.kind !== "stream") throw new Error("expected stream value");
+    expect(page.value.entries).toHaveLength(50);
+    expect(page.value.entries[0]!.id).toBe("6-1");
+    expect(page.value.lastId).toBe("55-1");
+    expect(page.value.truncated).toBe(true);
+  });
+
+  test("keyOp propagates transport failures instead of returning ok:false", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "DEL") throw new Error("ECONNREFUSED: connection refused");
+      return "OK";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.explorer!.keyOp({ op: "delete", keys: ["a"] })).rejects.toBeInstanceOf(DbError);
+    // Command rejections still surface as result errors.
+    const missing = makeFake(INFO_REDIS, (command) => { if (command === "RENAME") throw new Error("ERR no such key"); return "OK"; });
+    const okSession = await makeRedisDriver(missing.factory).connect({ url: URL });
+    const result = await okSession.explorer!.keyOp({ op: "rename", from: "a", to: "b" });
+    expect(result.ok).toBe(false);
+  });
+
+  test("connect() closes the transport when INFO detection fails", async () => {
+    let closed = false;
+    const factory: TransportFactory = () => ({
+      send: async (command) => { if (command === "INFO") throw new Error("NOPERM this user has no permissions to run the 'info' command"); return "OK"; },
+      connect: async () => {},
+      close: async () => { closed = true; },
+    });
+    await expect(makeRedisDriver(factory).connect({ url: URL })).rejects.toMatchObject({ code: "sql" });
+    expect(closed).toBe(true);
   });
 });

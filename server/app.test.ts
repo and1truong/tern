@@ -103,3 +103,16 @@ test("datasource routes resolve profiles through registered drivers and gate wri
     expect((await post('datasource/session', { connId: profile.id })).status).toBe(404);
   } finally { db.close(); }
 });
+
+test("state DELETE accepts redis console keys", async () => {
+  const db = openAppDatabase(':memory:');
+  const app = makeApp(db);
+  try {
+    const post = (key: string) => app(new Request('http://localhost/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, value: { input: 'PING' } }) }));
+    expect((await post('redis:doc-9')).status).toBe(200);
+    const removed = await app(new Request('http://localhost/api/state?key=redis:doc-9', { method: 'DELETE' }));
+    expect(removed.status).toBe(200);
+    expect(db.query("SELECT count(*) AS n FROM app_state WHERE key = 'redis:doc-9'").get()).toEqual({ n: 0 });
+    expect((await app(new Request('http://localhost/api/state?key=evil:key', { method: 'DELETE' }))).status).toBe(400);
+  } finally { db.close(); }
+});

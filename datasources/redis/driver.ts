@@ -52,17 +52,19 @@ export function makeRedisDriver(transportFactory: TransportFactory = defaultFact
       const transport = transportFactory(sessionUrl(config.url, config.database));
       try {
         await withTimeout(transport.connect(), options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+        const info = await detectInfo(transport);
+        return {
+          info,
+          console: makeConsoleProvider(transport),
+          explorer: makeExplorerProvider(transport, info),
+          close: async () => { await transport.close().catch(() => {}); },
+        };
       } catch (error) {
+        // Connection and metadata detection share the cleanup path so a
+        // half-open transport (e.g. INFO refused by ACL) never leaks.
         await transport.close().catch(() => {});
         throw error;
       }
-      const info = await detectInfo(transport);
-      return {
-        info,
-        console: makeConsoleProvider(transport),
-        explorer: makeExplorerProvider(transport, info),
-        close: async () => { await transport.close().catch(() => {}); },
-      };
     },
   };
 }
@@ -174,11 +176,20 @@ const STRING_MAX_BYTES = 1_000_000;
 function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo): KeyValueExplorerProvider {
   const version = info.version;
 
+  // Redis command rejections are tagged so keyOp can turn them into
+  // KeyOpResult errors while transport failures propagate to the router
+  // (which evicts and closes the broken session).
+  const commandErrors = new WeakSet<DbError>();
+
   const send = async (command: string, args: string[]): Promise<unknown> => {
     try { return await transport.send(command, args); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (COMMAND_ERROR_PREFIX.test(message)) throw new DbError("sql", sanitize(message));
+      if (COMMAND_ERROR_PREFIX.test(message)) {
+        const dbError = new DbError("sql", sanitize(message));
+        commandErrors.add(dbError);
+        throw dbError;
+      }
       throw toDbError(error);
     }
   };
@@ -228,7 +239,9 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
         const n = typeof raw === "number" ? raw : Number(raw);
         return { ok: true, ...(Number.isFinite(n) ? { n } : {}) };
       } catch (error) {
-        if (error instanceof DbError) return { ok: false, error: error.message };
+        // Only server-side command rejections become result errors; transport
+        // failures propagate so the router can evict the broken session.
+        if (error instanceof DbError && commandErrors.has(error)) return { ok: false, error: error.message };
         throw error;
       }
     },
@@ -270,7 +283,9 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
         return { kind: "list", items, start, truncated: start + items.length < (await number("LLEN", [key]) ?? start + items.length) };
       }
       case "stream": {
-        const count = cursor !== undefined ? PAGE_SIZE + 1 : PAGE_SIZE;
+        // Pre-6.2 ranges include the cursor entry itself (dropped below), so
+        // paging there fetches one extra; +1 always probes for a further page.
+        const count = PAGE_SIZE + 1 + (cursor !== undefined && !versionAtLeast(version, 6, 2) ? 1 : 0);
         const startId = cursor !== undefined && versionAtLeast(version, 6, 2) ? `(${cursor}` : cursor !== undefined ? cursor : "-";
         const raw = (await send("XRANGE", [key, startId, "+", "COUNT", String(count)])) as unknown[] ?? [];
         let fetched = raw.map(parseStreamEntry);

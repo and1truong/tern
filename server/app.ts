@@ -42,7 +42,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
         }
         if (req.method === "DELETE") {
           const key = url.searchParams.get("key");
-          if (!key?.startsWith("sql:") || key.length > 200) return fail("Invalid SQL state key");
+          if (!key || !/^(sql:|redis:)/.test(key) || key.length > 200) return fail("Invalid state key");
           db.query("DELETE FROM app_state WHERE key = ?").run(key);
           return Response.json({ ok: true });
         }
