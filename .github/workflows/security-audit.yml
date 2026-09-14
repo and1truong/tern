@@ -1,0 +1,46 @@
+name: Security audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Mondays 09:00 UTC — catches newly-disclosed CVEs against unchanged deps
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bun-audit:
+    name: bun audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Audit
+        run: bun audit
+
+  osv-scanner:
+    name: osv-scanner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2.0.1
+        with:
+          scan-args: |-
+            --lockfile=bun.lock
+            ./
