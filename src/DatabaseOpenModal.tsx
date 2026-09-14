@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { dbApi, type DbSource } from "./dbApi.ts";
-import type { PgConnection } from "../shared.ts";
+import type { ConnectionProfile } from "../shared.ts";
 
 export function DatabaseOpenModal({ onClose, onOpen, initial = 'sqlite' }: {
   onClose: () => void; onOpen: (source: DbSource) => void; initial?: 'sqlite' | 'postgres';
@@ -15,7 +15,7 @@ export function DatabaseOpenModal({ onClose, onOpen, initial = 'sqlite' }: {
   const [username, setUsername] = useState('postgres');
   const [password, setPassword] = useState('');
   const [ssl, setSsl] = useState('prefer');
-  const [environment, setEnvironment] = useState<PgConnection['environment']>('development');
+  const [environment, setEnvironment] = useState<ConnectionProfile['environment']>('development');
   const [readOnly, setReadOnly] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -37,7 +37,7 @@ export function DatabaseOpenModal({ onClose, onOpen, initial = 'sqlite' }: {
           const result = await dbApi.connections.test(url());
           setMessage(`Connected: PostgreSQL ${result.serverVersion} · ${result.database} · ${result.ms} ms`);
         } else {
-          const c = await dbApi.connections.save(name.trim() || `${host}/${database}`, url(), environment, readOnly);
+          const c = await dbApi.connections.save("postgres", name.trim() || `${host}/${database}`, url(), environment, readOnly);
           onOpen({ kind: 'postgres', connId: c.id, label: c.label, url: c.url, environment: c.environment, readOnly: c.readOnly });
         }
       }

@@ -17,7 +17,7 @@ test("legacy migration preserves committed WAL connections, credentials and app 
   const old = openAppDatabase(source);
   const oldSecrets = new Map<string, string>();
   const currentSecrets = new Map<string, string>();
-  const saved = await makeConnections(old, secrets(oldSecrets)).save("saved", "postgres://user:fixture@localhost/test");
+  const saved = await makeConnections(old, secrets(oldSecrets)).save("postgres", "saved", "postgres://user:fixture@localhost/test");
   old.query("INSERT INTO app_state VALUES (?, ?)").run("workspace", JSON.stringify({ sql: "SELECT 42", activeId: saved.id }));
   old.query("INSERT INTO recent_files VALUES (?, ?)").run("/tmp/example.sqlite", 1);
   migrateAppDatabase(source, target); // source remains open with WAL writes
@@ -47,7 +47,7 @@ test("Tern credentials win and failed migration leaves legacy credentials intact
 
 test("plaintext legacy rows never replace an existing Tern credential", async () => {
   const db = openAppDatabase(':memory:');
-  db.query('INSERT INTO pg_connections(id,label,url) VALUES(?,?,?)').run('same', 'legacy', 'postgres://old:fixture@localhost/old');
+  db.query('INSERT INTO datasource_connections(id,label,driver,url) VALUES(?,?,?,?)').run('same', 'legacy', 'postgres', 'postgres://old:fixture@localhost/old');
   const current = new Map([['connection:same', 'postgres://new:fixture@localhost/new']]);
   const connections = makeConnections(db, withLegacyCredentials(secrets(current), secrets()));
   expect(await connections.resolveUrl('same') === current.get('connection:same')).toBe(true);

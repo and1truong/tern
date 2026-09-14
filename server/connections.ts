@@ -1,16 +1,18 @@
 import { LEGACY_SECRET_SERVICE, withLegacyCredentials } from "./legacyMigration.ts";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import type { PgConnection } from "../shared.ts";
+import type { ConnectionProfile } from "../shared.ts";
+import { validateRedisUrl } from "../datasources/redis/connection.ts";
 
 const SECRET_SERVICE = "dev.tern.credentials";
 
-interface PgConnectionRow {
+interface ConnectionRow {
   id: string;
   label: string;
+  driver: string;
   url: string;
   secret_name: string | null;
-  environment: PgConnection["environment"];
+  environment: ConnectionProfile["environment"];
   read_only: number;
   created_at: number;
   last_used_at: number | null;
@@ -43,6 +45,13 @@ export function validateConnectionUrl(url: string): void {
   }
 }
 
+// Per-driver connection-url validation. Adding a backend means registering its
+// validator here (and its driver in server/app.ts's registry).
+const defaultValidators: Record<string, (url: string) => void> = {
+  postgres: validateConnectionUrl,
+  redis: validateRedisUrl,
+};
+
 function sanitizedUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -56,9 +65,10 @@ function hasPassword(url: string): boolean {
   catch { return false; }
 }
 
-const toPgConnection = (row: PgConnectionRow): PgConnection => ({
+const toProfile = (row: ConnectionRow): ConnectionProfile => ({
   id: row.id,
   label: row.label,
+  driver: row.driver,
   url: sanitizedUrl(row.url),
   createdAt: row.created_at,
   lastUsedAt: row.last_used_at,
@@ -67,25 +77,25 @@ const toPgConnection = (row: PgConnectionRow): PgConnection => ({
 });
 
 export interface Connections {
-  list(): Promise<PgConnection[]>;
-  get(id: string): Promise<PgConnection | null>;
+  list(): Promise<ConnectionProfile[]>;
+  get(id: string): Promise<ConnectionProfile | null>;
   resolveUrl(id: string): Promise<string | null>;
-  save(label: string, url: string, options?: { id?: string; environment?: PgConnection["environment"]; readOnly?: boolean }): Promise<PgConnection>;
+  save(driver: string, label: string, url: string, options?: { id?: string; environment?: ConnectionProfile["environment"]; readOnly?: boolean }): Promise<ConnectionProfile>;
   touch(id: string): void;
   delete(id: string): Promise<boolean>;
 }
 
-export function makeConnections(db: Database, secrets: SecretStore = systemSecrets): Connections {
+export function makeConnections(db: Database, secrets: SecretStore = systemSecrets, validators: Record<string, (url: string) => void> = defaultValidators): Connections {
   const row = (id: string) =>
-    db.query<PgConnectionRow, [string]>("SELECT * FROM pg_connections WHERE id = ?").get(id) ?? null;
+    db.query<ConnectionRow, [string]>("SELECT * FROM datasource_connections WHERE id = ?").get(id) ?? null;
 
   const api: Connections = {
     list: async () =>
-      db.query<PgConnectionRow, []>("SELECT * FROM pg_connections ORDER BY last_used_at DESC NULLS LAST, label")
-        .all().map(toPgConnection),
+      db.query<ConnectionRow, []>("SELECT * FROM datasource_connections ORDER BY last_used_at DESC NULLS LAST, label")
+        .all().map(toProfile),
     get: async (id) => {
       const found = row(id);
-      return found ? toPgConnection(found) : null;
+      return found ? toProfile(found) : null;
     },
     resolveUrl: async (id) => {
       const found = row(id);
@@ -102,12 +112,14 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       const existing = await secrets.get(secretName);
       const migratedUrl = existing ?? found.url;
       if (existing === null) await secrets.set(secretName, migratedUrl);
-      db.query("UPDATE pg_connections SET url = ?, secret_name = ? WHERE id = ?")
+      db.query("UPDATE datasource_connections SET url = ?, secret_name = ? WHERE id = ?")
         .run(sanitizedUrl(migratedUrl), secretName, found.id);
       return migratedUrl;
     },
-    save: async (label, url, options = {}) => {
-      validateConnectionUrl(url);
+    save: async (driver, label, url, options = {}) => {
+      const validate = validators[driver];
+      if (!validate) throw new Error(`Unknown driver "${driver}"`);
+      validate(url);
       const id = options.id ?? randomUUID();
       const environment = options.environment ?? "development";
       const readOnly = options.readOnly ?? true;
@@ -117,9 +129,9 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       else await secrets.delete(secretName).catch(() => false);
       try {
         db.query(
-          "INSERT INTO pg_connections (id, label, url, secret_name, environment, read_only) VALUES (?, ?, ?, ?, ?, ?) " +
-            "ON CONFLICT(id) DO UPDATE SET label = excluded.label, url = excluded.url, secret_name = excluded.secret_name, environment = excluded.environment, read_only = excluded.read_only",
-        ).run(id, label, sanitizedUrl(url), secret, environment, readOnly ? 1 : 0);
+          "INSERT INTO datasource_connections (id, label, driver, url, secret_name, environment, read_only) VALUES (?, ?, ?, ?, ?, ?, ?) " +
+            "ON CONFLICT(id) DO UPDATE SET label = excluded.label, driver = excluded.driver, url = excluded.url, secret_name = excluded.secret_name, environment = excluded.environment, read_only = excluded.read_only",
+        ).run(id, label, driver, sanitizedUrl(url), secret, environment, readOnly ? 1 : 0);
       } catch (error) {
         if (secret) await secrets.delete(secret).catch(() => false);
         throw error;
@@ -128,11 +140,11 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       if (!saved) throw new Error("save failed");
       return saved;
     },
-    touch: (id) => { db.query("UPDATE pg_connections SET last_used_at = unixepoch() WHERE id = ?").run(id); },
+    touch: (id) => { db.query("UPDATE datasource_connections SET last_used_at = unixepoch() WHERE id = ?").run(id); },
     delete: async (id) => {
       const found = row(id);
       if (found?.secret_name) await secrets.delete(found.secret_name);
-      return db.query("DELETE FROM pg_connections WHERE id = ?").run(id).changes > 0;
+      return db.query("DELETE FROM datasource_connections WHERE id = ?").run(id).changes > 0;
     },
   };
   return api;

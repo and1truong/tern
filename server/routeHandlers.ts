@@ -147,15 +147,15 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       } catch (e) { return dbErrorResponse(e); }
     },
 
-    // GET /connections -> { connections: PgConnection[] } (passwords redacted)
+    // GET /connections -> { connections: ConnectionProfile[] } (passwords redacted)
     async connectionsList(): Promise<Response> {
       const connections = (await conns.list()).map((c) => ({ ...c, url: redactUrl(c.url) }));
       return Response.json({ connections });
     },
 
-    // POST /connections  body { label, url } -> PgConnection (redacted)
+    // POST /connections  body { driver?, label, url } -> ConnectionProfile (redacted)
     async connectionSave(req: Request): Promise<Response> {
-      let b: { label?: string; url?: string; environment?: string; readOnly?: boolean };
+      let b: { driver?: string; label?: string; url?: string; environment?: string; readOnly?: boolean };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       const url = (b.url ?? "").trim();
       const label = (b.label ?? "").trim() || redactUrl(url);
@@ -163,7 +163,7 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       const environment = environments.has(b.environment ?? "")
         ? b.environment as "local" | "development" | "staging" | "production"
         : "development";
-      const saved = await conns.save(label, url, { environment, readOnly: b.readOnly !== false });
+      const saved = await conns.save(b.driver ?? "postgres", label, url, { environment, readOnly: b.readOnly !== false });
       conns.touch(saved.id);
       return Response.json({ ...saved, url: redactUrl(saved.url) });
     },

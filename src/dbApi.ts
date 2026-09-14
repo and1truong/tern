@@ -1,11 +1,11 @@
-import type { DbFile, DbSchema, QueryResult, ExecResult, PgConnection, RowChange, RowChangeStatement, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared.ts";
+import type { DbFile, DbSchema, QueryResult, ExecResult, ConnectionProfile, RowChange, RowChangeStatement, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared.ts";
 
 const API = "/api";
 const session = crypto.randomUUID();
 
 export type DbSource =
   | { kind: "sqlite"; path: string }
-  | { kind: "postgres"; connId: string; database?: string; label: string; url: string; environment: PgConnection["environment"]; readOnly: boolean };
+  | { kind: "postgres"; connId: string; database?: string; label: string; url: string; environment: ConnectionProfile["environment"]; readOnly: boolean };
 
 function selector(src: DbSource): { path?: string; connId?: string; database?: string } {
   return src.kind === "sqlite" ? { path: src.path } : { connId: src.connId, database: src.database };
@@ -85,9 +85,9 @@ export const dbApi = {
       post<RowMutationResult>(`${API}/rows/apply`, { ...selector(src), changes, allowWrite: true }, signal),
   },
   connections: {
-    list: () => fetch(`${API}/connections`).then(asJson<{ connections: PgConnection[] }>),
-    save: (label: string, url: string, environment: PgConnection["environment"], readOnly: boolean) =>
-      post<PgConnection>(`${API}/connections`, { label, url, environment, readOnly }),
+    list: () => fetch(`${API}/connections`).then(asJson<{ connections: ConnectionProfile[] }>),
+    save: (driver: string, label: string, url: string, environment: ConnectionProfile["environment"], readOnly: boolean) =>
+      post<ConnectionProfile>(`${API}/connections`, { driver, label, url, environment, readOnly }),
     test: (url: string, signal?: AbortSignal) => post<ConnectionTestResult>(`${API}/connections/test`, { url }, signal),
     delete: (id: string) =>
       fetch(`${API}/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" }).then(asJson<{ ok: boolean }>),

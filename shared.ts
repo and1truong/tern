@@ -81,11 +81,13 @@ export interface RowMutationResult {
   ms: number;
 }
 
-// A remembered Postgres connection. `url` is always credential-redacted;
-// full credential URLs are stored in the OS credential manager.
-export interface PgConnection {
+// A remembered connection profile for any registered datasource driver.
+// `url` is always credential-redacted; full credential URLs are stored in the
+// OS credential manager.
+export interface ConnectionProfile {
   id: string;
   label: string;
+  driver: string;      // registry id, e.g. "postgres" | "redis"
   url: string;
   createdAt: number;
   lastUsedAt: number | null;
