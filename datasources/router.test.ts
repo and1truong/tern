@@ -136,3 +136,44 @@ describe("datasource router", () => {
     expect((await router.route(makeRequest("/session", { connId: "nope" }))).status).toBe(404);
   });
 });
+
+describe("session lifecycle on errors", () => {
+  test("logical errors retain the session; transport errors evict and close it", async () => {
+    let closed = 0;
+    let failMode: "none" | "readonly" | "transport" = "readonly";
+    const { driver, connectCount } = fakeDriver({
+      session: {
+        console: {
+          async exec(command) {
+            if (failMode === "readonly") throw new DbError("not_read_only", "write refused");
+            if (failMode === "transport") throw new DbError("sql", "connection refused");
+            return { reply: { t: "str", s: command }, ms: 1 };
+          },
+          async catalog() { return []; },
+        },
+        close: async () => { closed++; },
+      },
+    });
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    await router.route(makeRequest("/session", { connId: "p1" }));
+
+    const denied = await router.route(makeRequest("/exec", { connId: "p1", command: "SET k v" }, () => false));
+    expect(denied.status).toBe(400);
+    // A read-only rejection is logical: the healthy session stays cached.
+    expect(closed).toBe(0);
+    failMode = "none";
+    const ok = await router.route(makeRequest("/exec", { connId: "p1", command: "GET k" }, () => true));
+    expect(ok.status).toBe(200);
+    expect(connectCount()).toBe(1);
+
+    failMode = "transport";
+    const broken = await router.route(makeRequest("/exec", { connId: "p1", command: "GET k" }, () => true));
+    expect(broken.status).toBe(400);
+    expect(closed).toBe(1);
+    // The broken session was evicted: the next call reconnects.
+    await router.route(makeRequest("/exec", { connId: "p1", command: "GET k" }, () => true));
+    expect(connectCount()).toBe(2);
+  });
+});

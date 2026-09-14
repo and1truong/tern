@@ -33,14 +33,14 @@ export function RedisKeyView({ source, keyName, writable, onChanged }: {
     finally { setBusy(false); }
   }, [source, keyName]);
 
-  useEffect(() => { setInspection(null); void load(); }, [load]);
+  useEffect(() => { setInspection(null); setStringDraft(null); void load(); }, [load]);
 
   const mutate = async (op: Parameters<typeof dbApi.datasource.keyOp>[1]) => {
     setBusy(true); setError('');
     try {
       const result = await dbApi.datasource.keyOp(source, op);
       if (!result.ok) setError(result.error ?? 'Operation failed');
-      else { onChanged?.(); await load(); }
+      else { setStringDraft(null); onChanged?.(); await load(); }
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   };
@@ -69,9 +69,9 @@ export function RedisKeyView({ source, keyName, writable, onChanged }: {
       {v.kind === 'none' && <p className="text-sm text-[var(--text-muted)]">This key does not exist (it may have expired).</p>}
       {v.kind === 'unknown' && <p className="text-sm text-[var(--text-muted)]">{v.note}</p>}
       {v.kind === 'string' && <div className="space-y-2">
-        <textarea readOnly={stringDraft === null} value={stringDraft ?? v.value} onChange={e => setStringDraft(e.target.value)}
+        <textarea readOnly={!writable} value={stringDraft ?? v.value} onChange={e => setStringDraft(e.target.value)}
           rows={6} className="w-full bg-[var(--bg)] border border-[var(--border)] p-2 font-mono text-xs" />
-        <p className="text-xs text-[var(--faint)]">{v.lengthBytes} bytes{v.truncated ? ' · preview truncated' : ''}</p>
+        <p className="text-xs text-[var(--faint)]">{v.lengthBytes} bytes{v.truncated ? ' · preview truncated' : ''}{writable && stringDraft === null ? ' · click into the text to edit' : ''}</p>
         {writable && stringDraft !== null && <div className="flex gap-1">
           <button className="primary text-xs" disabled={busy} onClick={() => void mutate({ op: 'setString', key: keyName, value: stringDraft })}>Save value</button>
           <button className="text-xs" onClick={() => setStringDraft(null)}>Revert</button>

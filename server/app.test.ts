@@ -68,9 +68,10 @@ test("standalone API persists state and recent files, denies implicit access/wri
 
 test("datasource routes resolve profiles through registered drivers and gate writes", async () => {
   const calls: { command: string; args: string[] }[] = [];
+  let closedTransports = 0;
   const redis = makeRedisDriver(() => ({
     async send(command: string, args: string[]) { calls.push({ command, args }); return command === 'INFO' ? '# Server\nredis_version:7.2.4' : command === 'GET' ? 'v1' : 'OK'; },
-    async connect() {}, async close() {},
+    async connect() {}, async close() { closedTransports++; },
   }));
   const db = openAppDatabase(':memory:');
   const app = makeApp(db, { drivers: [redis] });
@@ -95,5 +96,10 @@ test("datasource routes resolve profiles through registered drivers and gate wri
     expect(calls.some(c => c.command === 'SET')).toBe(true);
 
     expect((await post('state', { key: 'redis:doc-1', value: { input: 'PING', history: [] } })).status).toBe(200);
+
+    // Deleting the profile closes its cached driver sessions.
+    expect((await app(new Request(`http://localhost/api/connections?id=${profile.id}`, { method: 'DELETE' }))).status).toBe(200);
+    expect(closedTransports).toBeGreaterThan(0);
+    expect((await post('datasource/session', { connId: profile.id })).status).toBe(404);
   } finally { db.close(); }
 });

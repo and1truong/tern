@@ -273,10 +273,14 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
         const count = cursor !== undefined ? PAGE_SIZE + 1 : PAGE_SIZE;
         const startId = cursor !== undefined && versionAtLeast(version, 6, 2) ? `(${cursor}` : cursor !== undefined ? cursor : "-";
         const raw = (await send("XRANGE", [key, startId, "+", "COUNT", String(count)])) as unknown[] ?? [];
-        let entries = raw.map(parseStreamEntry);
-        if (cursor !== undefined && !versionAtLeast(version, 6, 2)) entries = entries.filter(e => streamIdAfter(e.id, cursor));
+        let fetched = raw.map(parseStreamEntry);
+        if (cursor !== undefined && !versionAtLeast(version, 6, 2)) fetched = fetched.filter(e => streamIdAfter(e.id, cursor));
+        // The cursor resumes after the last DISPLAYED entry; the extra fetched
+        // entry (when requested) only proves that more pages follow.
+        const hasMore = fetched.length > PAGE_SIZE;
+        const entries = fetched.slice(0, PAGE_SIZE);
         const lastId = entries.length ? entries.at(-1)!.id : null;
-        return { kind: "stream", length: await number("XLEN", [key]) ?? entries.length, entries: entries.slice(0, PAGE_SIZE), lastId, truncated: entries.length >= PAGE_SIZE && lastId !== null };
+        return { kind: "stream", length: await number("XLEN", [key]) ?? entries.length, entries, lastId, truncated: (cursor !== undefined ? hasMore : fetched.length >= PAGE_SIZE) && lastId !== null };
       }
       default:
         return { kind: "unknown", note: `Server type '${type}' has no viewer` };

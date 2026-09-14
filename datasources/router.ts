@@ -56,8 +56,14 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
       const session = await resolveSession(connId, database);
       return Response.json(await fn(session));
     } catch (error) {
-      // A failed call likely means a broken transport — force a reconnect next time.
-      sessions.delete(key);
+      // Only transport-level failures break the session; logical errors (a
+      // read-only rejection, a refused key op) keep the healthy session.
+      // Evicted sessions are closed, never just dropped.
+      if (error instanceof DbError && (error.code === "sql" || error.code === "timeout")) {
+        const evicted = sessions.get(key);
+        sessions.delete(key);
+        await evicted?.close().catch(() => {});
+      }
       return dbErrorResponse(error);
     }
   };

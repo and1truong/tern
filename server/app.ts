@@ -29,7 +29,10 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
     if (req.method === "POST" && req.headers.get("content-type")?.split(";")[0] !== "application/json") return fail("JSON required", 415);
     const session = req.headers.get("x-tern-session") ?? "api";
     if (session.length > 100) return fail("Invalid session");
-    const h = makeHandlers(connections, (id, database) => writable.has(`${session}:${id}/${database ?? ""}`));
+    const h = makeHandlers(connections, (id, database) => writable.has(`${session}:${id}/${database ?? ""}`), {
+      // Deleting a profile must also drop its cached driver sessions.
+      onConnectionDeleted: (id) => datasource.invalidate(id),
+    });
     try {
       const path = url.pathname.replace(/^\/api/, "");
       if (path === "/state") {

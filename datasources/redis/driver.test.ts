@@ -280,3 +280,43 @@ describe("explorer keyOp", () => {
     expect(result.error).toMatch(/no such key/);
   });
 });
+
+describe("stream paging regression", () => {
+  test("cursor resumes after the last displayed entry, never skipping one", async () => {
+    // 51 entries fetched with the probe count: the 51st only proves more exist.
+    const ids = Array.from({ length: 51 }, (_, i) => `${i + 1}-1`);
+    const { factory } = makeFake(INFO_REDIS, (command, args) => {
+      if (command === "XRANGE") {
+        const start = args[1]!;
+        const after = start.startsWith("(") ? start.slice(1) : null;
+        let list: [string, string[]][] = ids.map(id => [id, ["f", "v"]]);
+        if (after) {
+          const [maj, seq] = after.split("-").map(Number) as [number, number];
+          list = list.filter(([id]) => {
+            const [iMaj, iSeq] = id!.split("-").map(Number);
+            return iMaj! > maj! || (iMaj === maj && (iSeq ?? 0) > (seq ?? 0));
+          });
+        }
+        return list.slice(0, Number(args[4] ?? 50));
+      }
+      if (command === "TTL") return -1;
+      if (command === "MEMORY") return 0;
+      if (command === "XLEN") return ids.length;
+      if (command === "TYPE") return "stream";
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const page = await session.explorer!.inspect("st", "0-0");
+    if (page.value.kind !== "stream") throw new Error("expected stream value");
+    expect(page.value.entries).toHaveLength(50);
+    expect(page.value.entries[0]!.id).toBe("1-1");
+    expect(page.value.entries.at(-1)!.id).toBe("50-1");
+    expect(page.value.lastId).toBe("50-1");
+    expect(page.value.truncated).toBe(true);
+
+    // Next page starts after 50-1 and shows the 51st.
+    const next = await session.explorer!.inspect("st", page.value.lastId!);
+    if (next.value.kind !== "stream") throw new Error("expected stream value");
+    expect(next.value.entries[0]!.id).toBe("51-1");
+  });
+});

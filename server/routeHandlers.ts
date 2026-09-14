@@ -23,7 +23,9 @@ export const dbErrorResponse = (e: unknown): Response => {
 // A request targets either a SQLite file (`path`) or a saved Postgres
 // connection (`connId`). For Postgres the full url — which may carry a password
 // — is resolved server-side from pg_connections, so it never rides on a request.
-export function makeHandlers(conns: Connections, sessionWritable?: (id: string, database?: string) => boolean) {
+export function makeHandlers(conns: Connections, sessionWritable?: (id: string, database?: string) => boolean, hooks?: {
+  onConnectionDeleted?: (id: string) => Promise<void>;   // lets the datasource layer drop cached sessions
+}) {
   const environments = new Set(["local", "development", "staging", "production"]);
   const resolvePgUrl = async (connId: string, database?: string): Promise<string> => {
     const url = await conns.resolveUrl(connId);
@@ -182,7 +184,9 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
     // DELETE /connections?id=<id> -> { ok }
     async connectionDelete(url: URL): Promise<Response> {
       const id = url.searchParams.get("id") ?? "";
-      return Response.json({ ok: await conns.delete(id) });
+      const ok = await conns.delete(id);
+      if (ok) await hooks?.onConnectionDeleted?.(id);
+      return Response.json({ ok });
     },
   };
 }
