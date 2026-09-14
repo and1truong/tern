@@ -6,6 +6,20 @@ import { compileRowChanges } from "./rowMutations.ts";
 import type { RowChange } from "../shared.ts";
 import { DbError } from "../shared.ts";
 
+const safeMessage = (message: string) => message.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[PostgreSQL connection]");
+
+// Shared with the datasource router so driver errors map to the same statuses.
+export const dbErrorResponse = (e: unknown): Response => {
+  if (e instanceof DbError) {
+    const status = e.code === "not_found" ? 404
+      : e.code === "timeout" || e.code === "cancelled" ? 408
+      : e.code === "conflict" ? 409
+      : 400;
+    return Response.json({ error: safeMessage(e.message), code: e.code }, { status });
+  }
+  return Response.json({ error: e instanceof Error ? safeMessage(e.message) : "db error" }, { status: 400 });
+};
+
 // A request targets either a SQLite file (`path`) or a saved Postgres
 // connection (`connId`). For Postgres the full url — which may carry a password
 // — is resolved server-side from pg_connections, so it never rides on a request.
@@ -30,18 +44,6 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       if (u.password) u.password = "***";
       return u.toString();
     } catch { return url; }
-  };
-
-  const safeMessage = (message: string) => message.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[PostgreSQL connection]");
-  const dbErrorResponse = (e: unknown): Response => {
-    if (e instanceof DbError) {
-      const status = e.code === "not_found" ? 404
-        : e.code === "timeout" || e.code === "cancelled" ? 408
-        : e.code === "conflict" ? 409
-        : 400;
-      return Response.json({ error: safeMessage(e.message), code: e.code }, { status });
-    }
-    return Response.json({ error: e instanceof Error ? safeMessage(e.message) : "db error" }, { status: 400 });
   };
 
   return {
