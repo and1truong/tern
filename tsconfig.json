@@ -16,5 +16,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["server.ts", "server/**/*.ts", "src/**/*.ts", "src/**/*.tsx", "datasources/**/*.ts", "shared.ts", "playwright.config.ts", "e2e/**/*.ts", "scripts/verify-postgres.ts"]
+  "include": ["server.ts", "server/**/*.ts", "src/**/*.ts", "src/**/*.tsx", "datasources/**/*.ts", "shared.ts", "playwright.config.ts", "e2e/**/*.ts", "scripts/verify-postgres.ts", "scripts/verify-redis.ts"]
 }
