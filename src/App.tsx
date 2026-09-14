@@ -122,8 +122,16 @@ export function App() {
   }, []);
   const forget = async (s: DbSource) => {
     if (tabs.some(t => s.kind === 'postgres' ? t.source.kind === 'postgres' && t.source.connId === s.connId : t.source.kind === 'sqlite' && t.source.path === s.path)) { setError('Close this connection’s documents before removing it.'); return; }
-    try { if (s.kind === 'postgres') await dbApi.connections.delete(s.connId); else await dbApi.forget(s.path); await refreshConnections(); }
-    catch (e) { setError(String(e)); }
+    try {
+      if (s.kind === 'postgres') await dbApi.connections.delete(s.connId); else await dbApi.forget(s.path);
+      await refreshConnections();
+      const removed = (t: DbSource | null) => !!t && (s.kind === 'postgres' ? t.kind === 'postgres' && t.connId === s.connId : t.kind === 'sqlite' && t.path === s.path);
+      setSelected(prev => removed(prev) ? null : prev);
+      const stale = (key: string) => s.kind === 'postgres' ? key === s.connId || key.startsWith(`${s.connId}/`) : key === s.path;
+      const prune = <T,>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([key]) => !stale(key)));
+      setDatabases(prune); setSchemas(prune); setStates(prune); setWritable(prune);
+      [...initializedAccess.current].filter(stale).forEach(key => initializedAccess.current.delete(key));
+    } catch (e) { setError(String(e)); }
   };
   return <main className="workbench" onPointerDown={e => { if (!(e.target as Element).closest('.menubar')) e.currentTarget.querySelectorAll<HTMLDetailsElement>('.menubar details[open]').forEach(d => { d.open = false; }); }}>
     <header className="menubar" onClick={e => { const target = (e.target as Element).closest('details'); e.currentTarget.querySelectorAll<HTMLDetailsElement>('details').forEach(d => { if (d !== target || (e.target as Element).closest('button')) d.open = false; }); }}><Database size={15}/><b className="mr-3">Tern</b>
