@@ -6,16 +6,19 @@ const versionParts = (version: string): [number, number] => {
   const parts = version.split(".").map(Number);
   return [parts[0] ?? 0, parts[1] ?? 0];
 };
-const since = (version: string, maj: number, min = 0) => {
+
+export function versionAtLeast(version: string, maj: number, min = 0): boolean {
   const [vMaj, vMin] = versionParts(version);
   return vMaj > maj || (vMaj === maj && vMin >= min);
 };
+const since = (version: string, maj: number, min = 0) => versionAtLeast(version, maj, min);
 
 export function parseInfoSections(raw: string | Record<string, unknown>): {
   sections: Record<string, string>; modules: string[];
 } {
   const sections: Record<string, string> = {};
   const modules: string[] = [];
+  if (raw === null || raw === undefined) return { sections, modules };
   if (typeof raw === "object") {
     for (const [k, v] of Object.entries(raw)) sections[k] = String(v);
     return { sections, modules };
