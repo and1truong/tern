@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAppDatabase } from "./appDatabase.ts";
 import { makeApp } from "./app.ts";
+import { makeRedisDriver } from "../datasources/redis/driver.ts";
 
 test("application database remains protected when configured through a symlink", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tern-app-links-')));
@@ -63,4 +64,55 @@ test("standalone API persists state and recent files, denies implicit access/wri
     expect((await post('exec', { path, sql: 'BEGIN; DELETE FROM users; COMMIT' })).status).toBe(400);
     expect((await post('exec', { path, sql: 'SELECT COUNT(*) AS n FROM users' })).status).toBe(200);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("datasource routes resolve profiles through registered drivers and gate writes", async () => {
+  const calls: { command: string; args: string[] }[] = [];
+  let closedTransports = 0;
+  const redis = makeRedisDriver(() => ({
+    async send(command: string, args: string[]) { calls.push({ command, args }); return command === 'INFO' ? '# Server\nredis_version:7.2.4' : command === 'GET' ? 'v1' : 'OK'; },
+    async connect() {}, async close() { closedTransports++; },
+  }));
+  const db = openAppDatabase(':memory:');
+  const app = makeApp(db, { drivers: [redis] });
+  const post = (route: string, body: unknown, headers = {}) => app(new Request(`http://localhost/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }));
+  try {
+    const saved = await post('connections', { driver: 'redis', label: 'cache', url: 'redis://localhost:6379' });
+    expect(saved.status).toBe(200);
+    const profile = await saved.json();
+    expect(profile.driver).toBe('redis');
+
+    expect((await post('datasource/session', { connId: 'nope' })).status).toBe(404);
+    const session = await post('datasource/session', { connId: profile.id });
+    expect(session.status).toBe(200);
+    expect((await session.json()).info.flavor).toBe('redis');
+
+    const read = await post('datasource/exec', { connId: profile.id, command: 'GET k' });
+    expect(read.status).toBe(200);
+    expect((await read.json()).reply).toEqual({ t: 'str', s: 'v1' });
+    expect((await post('datasource/exec', { connId: profile.id, command: 'SET k v' })).status).toBe(400);
+    expect((await post('access', { connId: profile.id, writable: true })).status).toBe(200);
+    expect((await post('datasource/exec', { connId: profile.id, command: 'SET k v' })).status).toBe(200);
+    expect(calls.some(c => c.command === 'SET')).toBe(true);
+
+    expect((await post('state', { key: 'redis:doc-1', value: { input: 'PING', history: [] } })).status).toBe(200);
+
+    // Deleting the profile closes its cached driver sessions.
+    expect((await app(new Request(`http://localhost/api/connections?id=${profile.id}`, { method: 'DELETE' }))).status).toBe(200);
+    expect(closedTransports).toBeGreaterThan(0);
+    expect((await post('datasource/session', { connId: profile.id })).status).toBe(404);
+  } finally { db.close(); }
+});
+
+test("state DELETE accepts redis console keys", async () => {
+  const db = openAppDatabase(':memory:');
+  const app = makeApp(db);
+  try {
+    const post = (key: string) => app(new Request('http://localhost/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, value: { input: 'PING' } }) }));
+    expect((await post('redis:doc-9')).status).toBe(200);
+    const removed = await app(new Request('http://localhost/api/state?key=redis:doc-9', { method: 'DELETE' }));
+    expect(removed.status).toBe(200);
+    expect(db.query("SELECT count(*) AS n FROM app_state WHERE key = 'redis:doc-9'").get()).toEqual({ n: 0 });
+    expect((await app(new Request('http://localhost/api/state?key=evil:key', { method: 'DELETE' }))).status).toBe(400);
+  } finally { db.close(); }
 });

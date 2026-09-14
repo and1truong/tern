@@ -1,11 +1,15 @@
-import type { DbFile, DbSchema, QueryResult, ExecResult, PgConnection, RowChange, RowChangeStatement, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared.ts";
+import type { DbFile, DbSchema, QueryResult, ExecResult, ConnectionProfile, RowChange, RowChangeStatement, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult, DataSourceInfo, CommandResult, ScanPage, KeyInspection, KeyOp, KeyOpResult } from "../shared.ts";
+import type { CommandDoc } from "../datasources/redis/catalog.ts";
 
 const API = "/api";
 const session = crypto.randomUUID();
 
+export type RedisSource = { kind: "redis"; connId: string; database: string; label: string; url: string; environment: ConnectionProfile["environment"]; readOnly: boolean };
+
 export type DbSource =
   | { kind: "sqlite"; path: string }
-  | { kind: "postgres"; connId: string; database?: string; label: string; url: string; environment: PgConnection["environment"]; readOnly: boolean };
+  | { kind: "postgres"; connId: string; database?: string; label: string; url: string; environment: ConnectionProfile["environment"]; readOnly: boolean }
+  | RedisSource;
 
 function selector(src: DbSource): { path?: string; connId?: string; database?: string } {
   return src.kind === "sqlite" ? { path: src.path } : { connId: src.connId, database: src.database };
@@ -85,11 +89,25 @@ export const dbApi = {
       post<RowMutationResult>(`${API}/rows/apply`, { ...selector(src), changes, allowWrite: true }, signal),
   },
   connections: {
-    list: () => fetch(`${API}/connections`).then(asJson<{ connections: PgConnection[] }>),
-    save: (label: string, url: string, environment: PgConnection["environment"], readOnly: boolean) =>
-      post<PgConnection>(`${API}/connections`, { label, url, environment, readOnly }),
+    list: () => fetch(`${API}/connections`).then(asJson<{ connections: ConnectionProfile[] }>),
+    save: (driver: string, label: string, url: string, environment: ConnectionProfile["environment"], readOnly: boolean) =>
+      post<ConnectionProfile>(`${API}/connections`, { driver, label, url, environment, readOnly }),
     test: (url: string, signal?: AbortSignal) => post<ConnectionTestResult>(`${API}/connections/test`, { url }, signal),
     delete: (id: string) =>
       fetch(`${API}/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" }).then(asJson<{ ok: boolean }>),
+  },
+  // Key-value datasources (capability-provided; only drivers with console/explorer
+  // providers answer these).
+  datasource: {
+    test: (driver: string, url: string) => post<DataSourceInfo>(`${API}/datasource/test`, { driver, url }),
+    session: (src: RedisSource) => post<{ info: DataSourceInfo }>(`${API}/datasource/session`, selector(src)),
+    exec: (src: RedisSource, command: string) => post<CommandResult>(`${API}/datasource/exec`, { ...selector(src), command }),
+    scan: (src: RedisSource, q: { cursor: string; match?: string; count?: number; type?: string }) =>
+      post<ScanPage>(`${API}/datasource/scan`, { ...selector(src), ...q }),
+    inspect: (src: RedisSource, key: string, cursor?: string) =>
+      post<KeyInspection>(`${API}/datasource/key`, { ...selector(src), key, ...(cursor !== undefined ? { cursor } : {}) }),
+    keyOp: (src: RedisSource, op: KeyOp) => post<KeyOpResult>(`${API}/datasource/key/op`, { ...selector(src), op }),
+    catalog: (src: RedisSource) =>
+      fetch(`${API}/datasource/catalog?${selectorQuery(src)}`).then(asJson<{ commands: CommandDoc[] }>),
   },
 };

@@ -6,10 +6,26 @@ import { compileRowChanges } from "./rowMutations.ts";
 import type { RowChange } from "../shared.ts";
 import { DbError } from "../shared.ts";
 
+const safeMessage = (message: string) => message.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[PostgreSQL connection]");
+
+// Shared with the datasource router so driver errors map to the same statuses.
+export const dbErrorResponse = (e: unknown): Response => {
+  if (e instanceof DbError) {
+    const status = e.code === "not_found" ? 404
+      : e.code === "timeout" || e.code === "cancelled" ? 408
+      : e.code === "conflict" ? 409
+      : 400;
+    return Response.json({ error: safeMessage(e.message), code: e.code }, { status });
+  }
+  return Response.json({ error: e instanceof Error ? safeMessage(e.message) : "db error" }, { status: 400 });
+};
+
 // A request targets either a SQLite file (`path`) or a saved Postgres
 // connection (`connId`). For Postgres the full url — which may carry a password
 // — is resolved server-side from pg_connections, so it never rides on a request.
-export function makeHandlers(conns: Connections, sessionWritable?: (id: string, database?: string) => boolean) {
+export function makeHandlers(conns: Connections, sessionWritable?: (id: string, database?: string) => boolean, hooks?: {
+  onConnectionDeleted?: (id: string) => Promise<void>;   // lets the datasource layer drop cached sessions
+}) {
   const environments = new Set(["local", "development", "staging", "production"]);
   const resolvePgUrl = async (connId: string, database?: string): Promise<string> => {
     const url = await conns.resolveUrl(connId);
@@ -30,18 +46,6 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       if (u.password) u.password = "***";
       return u.toString();
     } catch { return url; }
-  };
-
-  const safeMessage = (message: string) => message.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[PostgreSQL connection]");
-  const dbErrorResponse = (e: unknown): Response => {
-    if (e instanceof DbError) {
-      const status = e.code === "not_found" ? 404
-        : e.code === "timeout" || e.code === "cancelled" ? 408
-        : e.code === "conflict" ? 409
-        : 400;
-      return Response.json({ error: safeMessage(e.message), code: e.code }, { status });
-    }
-    return Response.json({ error: e instanceof Error ? safeMessage(e.message) : "db error" }, { status: 400 });
   };
 
   return {
@@ -145,15 +149,15 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       } catch (e) { return dbErrorResponse(e); }
     },
 
-    // GET /connections -> { connections: PgConnection[] } (passwords redacted)
+    // GET /connections -> { connections: ConnectionProfile[] } (passwords redacted)
     async connectionsList(): Promise<Response> {
       const connections = (await conns.list()).map((c) => ({ ...c, url: redactUrl(c.url) }));
       return Response.json({ connections });
     },
 
-    // POST /connections  body { label, url } -> PgConnection (redacted)
+    // POST /connections  body { driver?, label, url } -> ConnectionProfile (redacted)
     async connectionSave(req: Request): Promise<Response> {
-      let b: { label?: string; url?: string; environment?: string; readOnly?: boolean };
+      let b: { driver?: string; label?: string; url?: string; environment?: string; readOnly?: boolean };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       const url = (b.url ?? "").trim();
       const label = (b.label ?? "").trim() || redactUrl(url);
@@ -161,7 +165,7 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       const environment = environments.has(b.environment ?? "")
         ? b.environment as "local" | "development" | "staging" | "production"
         : "development";
-      const saved = await conns.save(label, url, { environment, readOnly: b.readOnly !== false });
+      const saved = await conns.save(b.driver ?? "postgres", label, url, { environment, readOnly: b.readOnly !== false });
       conns.touch(saved.id);
       return Response.json({ ...saved, url: redactUrl(saved.url) });
     },
@@ -180,7 +184,9 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
     // DELETE /connections?id=<id> -> { ok }
     async connectionDelete(url: URL): Promise<Response> {
       const id = url.searchParams.get("id") ?? "";
-      return Response.json({ ok: await conns.delete(id) });
+      const ok = await conns.delete(id);
+      if (ok) await hooks?.onConnectionDeleted?.(id);
+      return Response.json({ ok });
     },
   };
 }

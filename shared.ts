@@ -81,11 +81,13 @@ export interface RowMutationResult {
   ms: number;
 }
 
-// A remembered Postgres connection. `url` is always credential-redacted;
-// full credential URLs are stored in the OS credential manager.
-export interface PgConnection {
+// A remembered connection profile for any registered datasource driver.
+// `url` is always credential-redacted; full credential URLs are stored in the
+// OS credential manager.
+export interface ConnectionProfile {
   id: string;
   label: string;
+  driver: string;      // registry id, e.g. "postgres" | "redis"
   url: string;
   createdAt: number;
   lastUsedAt: number | null;
@@ -110,6 +112,89 @@ export interface MigrationResult {
   validated: boolean;
   applied: boolean;
   ms: number;
+}
+
+// --- Datasource driver wire shapes (HTTP JSON between /api/datasource/* and the client) ---
+
+export type RedisFlavor = "redis" | "valkey" | "unknown";
+
+export interface Capabilities {
+  streams: boolean;   // >= 5.0
+  acl: boolean;       // >= 6.0
+  functions: boolean; // >= 7.0
+  cluster: boolean;
+  modules: boolean;
+  search: boolean;    // a search module (RedSearch / Valkey search) is loaded
+}
+
+export interface DataSourceInfo {
+  flavor: RedisFlavor;
+  version: string;
+  capabilities: Capabilities;
+  summary: Record<string, string | number | boolean>;  // small human-facing facts (uptime, port, memory…)
+}
+
+// Tagged RESP values so the console can render nested replies verbatim.
+export type RespValue =
+  | { t: "nil" }
+  | { t: "str"; s: string }                    // simple + bulk strings
+  | { t: "int"; n: number }
+  | { t: "dbl"; n: number }
+  | { t: "bool"; b: boolean }
+  | { t: "err"; s: string }
+  | { t: "big"; s: string }                    // big number, string-encoded
+  | { t: "verb"; format: string; s: string }   // verbatim string (RESP3)
+  | { t: "map"; entries: [RespValue, RespValue][] }
+  | { t: "set"; items: RespValue[] }
+  | { t: "arr"; items: RespValue[] };
+
+export interface CommandResult {
+  reply: RespValue;   // server reply; command errors arrive as { t: "err" }
+  ms: number;
+}
+
+export interface ScanPage {
+  cursor: string;     // "0" when the iteration is complete
+  keys: { key: string; type: string }[];
+}
+
+export type KeyValueView =
+  | { kind: "string"; value: string; truncated: boolean; lengthBytes: number }
+  | { kind: "hash"; entries: { field: string; value: string }[]; cursor: string; truncated: boolean }
+  | { kind: "list"; items: string[]; start: number; truncated: boolean }
+  | { kind: "set"; members: string[]; cursor: string; truncated: boolean }
+  | { kind: "zset"; entries: { member: string; score: number }[]; cursor: string; truncated: boolean }
+  | { kind: "stream"; length: number; entries: { id: string; fields: Record<string, string> }[]; lastId: string | null; truncated: boolean }
+  | { kind: "none" }
+  | { kind: "unknown"; note: string };
+
+export interface KeyInspection {
+  key: string;
+  type: string;             // string|list|set|zset|hash|stream|none|unknown server type
+  ttlSeconds: number;       // -1 no expiry, -2 missing key
+  memoryBytes: number | null;
+  size: number | null;      // cardinality / length / strlen
+  value: KeyValueView;
+}
+
+export type KeyOp =
+  | { op: "rename"; from: string; to: string }
+  | { op: "delete"; keys: string[] }
+  | { op: "expire"; key: string; seconds: number }
+  | { op: "persist"; key: string }
+  | { op: "setString"; key: string; value: string }
+  | { op: "hashSet"; key: string; field: string; value: string }
+  | { op: "hashDelete"; key: string; fields: string[] }
+  | { op: "setAdd"; key: string; members: string[] }
+  | { op: "setRemove"; key: string; members: string[] }
+  | { op: "zsetAdd"; key: string; member: string; score: number }
+  | { op: "zsetRemove"; key: string; members: string[] }
+  | { op: "listSet"; key: string; index: number; value: string };
+
+export interface KeyOpResult {
+  ok: boolean;
+  n?: number;       // keys/members affected when meaningful
+  error?: string;   // server error text when ok === false
 }
 
 // Thrown by dbServer on bad path / non-read query / SQL error. HTTP layer maps

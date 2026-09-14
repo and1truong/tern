@@ -29,6 +29,30 @@ Runtime references: [Bun HTTP server](https://bun.sh/docs/runtime/http/server) a
 as a strict TLS probe followed by plaintext only for `TLS_NOT_AVAILABLE`, working
 around native negotiation stalls without weakening required/verified TLS modes.
 
+## Datasource drivers
+
+Backends plug in through `datasources/contracts.ts`: a `DataSourceDriver` owns
+its protocol client, connection validation, server detection and capability
+providers. The core app never branches on a product name — it dispatches
+`/api/datasource/*` through `datasources/router.ts`, which resolves a saved
+profile's driver from the static registry in `server/app.ts` and serves
+whatever capability providers that driver exposes (`console`, `explorer`).
+Composition over one giant interface: drivers implement only the providers
+they support, and generic UI renders what is present.
+
+The Redis-compatible driver (`datasources/redis/`) is one driver family for
+Redis and Valkey: it connects over RESP, detects flavor/version/capabilities
+from `INFO`, and every UI decision consumes the detected `Capabilities`, never
+the product name. Pure modules (command catalog, autocomplete, explain, lint,
+RESP encoding) are isomorphic — the browser bundle imports them directly and
+they work offline. Bun's runtime `RedisClient` appears only inside
+`datasources/redis/driver.ts` behind the injectable `SessionTransport`, so the
+driver is unit-tested against fakes and remains replaceable.
+
+To add a backend: implement `DataSourceDriver` (+ optional providers), register
+it in `server/app.ts`'s registry, and add a URL validator to
+`server/connections.ts`. No core restructuring is required.
+
 ## Tern storage migration
 
 The package and UI are named Tern. The default app database is

@@ -32,7 +32,7 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
     setSorts([]);
     setPage(0);
   }
-  const { where, params } = compileGroup(filter, table.columns, source.kind);
+  const { where, params } = compileGroup(filter, table.columns, source.kind === 'sqlite' ? 'sqlite' : 'postgres');
   const query = `SELECT * FROM ${tableSql(table)}` + (where ? ` WHERE ${where}` : "") + orderBySql(paginationSorts(table, sorts));
   const parameters = JSON.stringify(params);
   useEffect(() => {
@@ -64,7 +64,7 @@ export function TableDocument({ table, schema, source, writable, onDirty, onLate
     </div>
     {error && <div role="alert" className="error">{error}</div>}
     <div className={pane === 'data' ? 'document-body' : 'hidden'}>
-      {filterOpen && <DatabaseFilterBuilder model={filter} cols={table.columns} dialect={source.kind} onChange={(value) => { if (!dirty) { setFilter(value); setPage(0); } }} />}
+      {filterOpen && <DatabaseFilterBuilder model={filter} cols={table.columns} dialect={source.kind === 'sqlite' ? 'sqlite' : 'postgres'} onChange={(value) => { if (!dirty) { setFilter(value); setPage(0); } }} />}
       <DataGrid table={resultTable} source={source} writable={writable} columns={resultTable.columns.map(c => c.name)} result={result} sorts={sorts} pageSize={size}
         onSort={(name, additive) => { setSorts(toggleSort(sorts, name, additive)); setPage(0); }} onPrevious={() => setPage(Math.max(0, page - 1))} onNext={() => setPage(page + 1)}
         onPageSize={(value) => { setSize(value); setPage(0); }} onDirtyChange={changed} onApplied={() => setRevision(revision + 1)} onExportAll={exportAll} />

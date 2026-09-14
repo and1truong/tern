@@ -80,6 +80,8 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     onDirty(true);
     saveTimer.current = setTimeout(() => { saveTimer.current = null; void dbApi.state.set(storageKey, next).then(() => { if (version === saveVersion.current) onDirty(false); }).catch((e) => setError(String(e))); }, 250);
   };
+  // SQL documents only exist for relational sources; redis uses the console.
+  const dialect = source.kind === "postgres" ? "postgres" as const : "sqlite" as const;
   const completionSchema = useMemo(() => Object.fromEntries(schema.tables.map((table) => [
     table.schema ? `${table.schema}.${table.name}` : table.name,
     table.columns.map((column) => column.name),
@@ -94,7 +96,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     const view = editor.current;
     const selection = view?.state.selection.main ?? { from: 0, to: 0 };
     let units: ReturnType<typeof executionUnits>;
-    try { units = executionUnits(sqlToRun(active.sql, selection, all, source.kind), source.kind); }
+    try { units = executionUnits(sqlToRun(active.sql, selection, all, dialect), dialect); }
     catch (e) { setError(String(e)); return; }
     const { statements, transaction, readOnly } = units;
     if (!statements.length) return;
@@ -109,7 +111,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     for (const statement of statements) {
       if (abort.signal.aborted) break;
       const started = performance.now();
-      const isWrite = forceWrite || transaction || isWriteSql(statement, source.kind);
+      const isWrite = forceWrite || transaction || isWriteSql(statement, dialect);
       if (isWrite && !readOnlyBatch && !writable) {
         nextOutputs.push({ sql: statement, error: "Read-only mode: enable Writable before running this statement." });
         break;
@@ -149,9 +151,9 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
 
   const explain = async () => {
     const selection = editor.current?.state.selection.main ?? { from: 0, to: 0 };
-    const statement = sqlToRun(active.sql, selection, false, source.kind)[0];
+    const statement = sqlToRun(active.sql, selection, false, dialect)[0];
     if (!statement) return;
-    if (isWriteSql(statement, source.kind)) {
+    if (isWriteSql(statement, dialect)) {
       setOutputs([{ sql: statement, kind: "explain", error: "EXPLAIN is available only for read queries." }]);
       return;
     }
