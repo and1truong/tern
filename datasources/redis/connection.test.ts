@@ -33,3 +33,9 @@ describe("sessionUrl", () => {
     expect(sessionUrl("redis://h:6379", undefined)).toBe("redis://h:6379");
   });
 });
+
+test("brackets IPv6 hosts", () => {
+  expect(buildRedisUrl({ host: "::1" })).toBe("redis://[::1]:6379");
+  expect(buildRedisUrl({ host: "::1", port: 6380, tls: true, database: 2 })).toBe("rediss://[::1]:6380/2");
+  expect(() => validateRedisUrl("redis://[::1]:6379")).not.toThrow();
+});

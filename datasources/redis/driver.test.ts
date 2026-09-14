@@ -380,3 +380,16 @@ describe("codex round 3 regressions", () => {
     expect(String((refused.reply as { s: string }).s)).toMatch(/indefinitely/);
   });
 });
+
+describe("codex round 4 regressions", () => {
+  test("connection-state commands are refused with guidance", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    for (const command of ["SELECT 1", "SWAPDB 0 1", "SUBSCRIBE channel", "PSUBSCRIBE pat*"]) {
+      const result = await session.console!.exec(command, { writable: true });
+      expect(result.reply.t, command).toBe("err");
+      expect(String((result.reply as { s: string }).s), command).toMatch(/refused by Tern/);
+      expect(calls.some(c => c.command === command.split(" ")[0]), command).toBe(false);
+    }
+  });
+});

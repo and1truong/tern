@@ -85,6 +85,16 @@ async function detectInfo(transport: SessionTransport): Promise<DataSourceInfo> 
 
 const COMMAND_ERROR_PREFIX = /^(ERR|WRONGTYPE|NOPERM|NOAUTH|BUSYGROUP|NOGROUP|MOVED|ASK|CROSSSLOT|EXECABORT|LOADING|BUSY|READONLY|MAXRETRIES|NOSCRIPT|MINVAL|INVALID|SETROLLBACK)/i;
 
+// The console shares one cached transport with the explorer: commands that
+// retarget or monopolize that connection are refused (the toolbar db selector
+// is the way to change databases — it opens a dedicated session).
+const UNSHARED_CONNECTION_COMMANDS: Record<string, string> = {
+  SELECT: "use the toolbar database selector instead",
+  SWAPDB: "it swaps databases for every connection on this server",
+  SUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
+  PSUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
+};
+
 function toDbError(error: unknown): DbError {
   const message = error instanceof Error ? error.message : String(error);
   if (/timed?\s?out|timeout/i.test(message)) return new DbError("timeout", sanitize(message));
@@ -118,6 +128,10 @@ function makeConsoleProvider(transport: SessionTransport): ConsoleProvider {
       }
       if (doc?.blocking && blockingTimeoutSeconds(doc, args) === 0) {
         return { reply: { t: "err", s: `ERR ${name} with timeout 0 blocks indefinitely; pass a positive timeout in seconds` }, ms: 0 };
+      }
+      const unshared = UNSHARED_CONNECTION_COMMANDS[name];
+      if (unshared) {
+        return { reply: { t: "err", s: `ERR ${name} is refused by Tern: ${unshared}` }, ms: 0 };
       }
       const started = performance.now();
       let reply: unknown;

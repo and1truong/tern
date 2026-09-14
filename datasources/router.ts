@@ -130,6 +130,14 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           case "/key/op": {
             const op = body.op;
             if (!op || typeof op !== "object") throw new DbError("not_found", "Invalid key operation");
+            // EXPIRE with 0 or a negative value deletes the key immediately —
+            // keep that behind the explicit delete flow, never the expire one.
+            if ((op as { op?: string }).op === "expire") {
+              const seconds = (op as { seconds?: unknown }).seconds;
+              if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 1) {
+                throw new Error("Expire requires a positive number of seconds");
+              }
+            }
             // Every key mutation is a write: require the enabled-write session.
             const { key: opKey } = connKey(body);
             if (!req.writable(opKey)) throw new DbError("not_read_only", "Connection is read-only");

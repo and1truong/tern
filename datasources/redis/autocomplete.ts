@@ -71,11 +71,14 @@ export interface ArgumentHint {
 }
 
 export function argumentHint(input: string): ArgumentHint {
-  const { tokens, atSpace } = splitPartial(input);
+  const { tokens } = splitPartial(input);
   if (tokens.length === 0) return { doc: null, position: 0, hint: "" };
   const doc = lookupCommand(tokens[0]!);
   if (!doc) return { doc: null, position: 0, hint: "" };
-  const position = tokens.length - 1 + (atSpace ? 1 : 0);
+  // tokens holds the completed tokens: with a trailing space the argument
+  // being typed is the next one, otherwise it replaces the partial token —
+  // either way its index is tokens.length - 1.
+  const position = tokens.length - 1;
   const spec = specForPosition(doc, position);
   if (!spec) return { doc, position, hint: "" };
   const detail = spec.description ?? spec.enum?.join(" | ") ?? spec.type ?? "";

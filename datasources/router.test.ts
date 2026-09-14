@@ -177,3 +177,15 @@ describe("session lifecycle on errors", () => {
     expect(connectCount()).toBe(2);
   });
 });
+
+test("/key/op expire requires a positive second count", async () => {
+  const { driver } = fakeDriver();
+  const registry = createDriverRegistry();
+  registry.register(driver);
+  const router = makeDatasourceRouter(profiles, registry);
+  for (const seconds of [0, -5, Number.NaN]) {
+    const res = await router.route(makeRequest("/key/op", { connId: "p1", op: { op: "expire", key: "k", seconds } }));
+    expect(res.status, String(seconds)).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/positive/);
+  }
+});

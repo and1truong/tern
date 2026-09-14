@@ -68,3 +68,14 @@ describe("argumentHint", () => {
     expect(argumentHint("FAKE x").doc).toBeNull();
   });
 });
+
+describe("argumentHint trailing whitespace", () => {
+  test("position advances once per completed argument", () => {
+    expect(argumentHint("SET ").position).toBe(0);
+    expect(argumentHint("SET ").hint).toContain("key");
+    expect(argumentHint("SET k ").position).toBe(1);
+    expect(argumentHint("SET k ").hint).toContain("value");
+    expect(argumentHint("SET k v ").position).toBe(2);
+    expect(argumentHint("SET k v EX 10 ").position).toBe(4);
+  });
+});

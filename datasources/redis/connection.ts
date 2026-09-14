@@ -6,12 +6,14 @@ export const REDIS_DEFAULT_PORT = 6379;
 export function buildRedisUrl(opts: {
   host: string; port?: number; username?: string; password?: string; tls?: boolean; database?: number;
 }): string {
+  // IPv6 literals must be bracketed in URLs (mirrors the Postgres builder).
+  const host = opts.host.includes(":") && !opts.host.startsWith("[") ? `[${opts.host}]` : opts.host;
   const auth = opts.password !== undefined
     ? `//${encodeURIComponent(opts.username ?? "")}:${encodeURIComponent(opts.password)}@`
     : "//";
   const port = opts.port ?? REDIS_DEFAULT_PORT;
   const db = opts.database !== undefined && opts.database > 0 ? `/${opts.database}` : "";
-  return `${opts.tls ? "rediss" : "redis"}:${auth}${opts.host}:${port}${db}`;
+  return `${opts.tls ? "rediss" : "redis"}:${auth}${host}:${port}${db}`;
 }
 
 export function validateRedisUrl(url: string): void {
