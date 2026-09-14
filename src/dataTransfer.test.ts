@@ -112,3 +112,9 @@ test("CSV preserves exact whitespace in exported column names", () => {
   const rows = [{ "name": "plain", " name ": "padded", " ": "space", " quoted, name ": "quoted" }];
   expect(parseCsv(serializeRows("csv", columns, rows))).toEqual({ columns, rows });
 });
+
+test('parseCsv strips a UTF-8 BOM from the first header name', () => {
+  const parsed = parseCsv('﻿id,name\n1,Ada');
+  expect(parsed.columns).toEqual(['id', 'name']);
+  expect(parsed.rows).toEqual([{ id: '1', name: 'Ada' }]);
+});

@@ -214,7 +214,8 @@ export function executionUnits(statements: string[], dialect: Dialect): { statem
     const words = structuralWords(statement, dialect);
     const namedWords = structuralWords(statement, dialect, true);
     const verb = words[0];
-    if (!control.includes(verb) && isWriteSql(statement, dialect)) wrote = true;
+    const readWrite = (verb === 'BEGIN' || verb === 'START') && words.includes('WRITE');
+    if (readWrite || (!control.includes(verb) && isWriteSql(statement, dialect))) wrote = true;
     if (verb === 'BEGIN' || verb === 'START') { open = true; explicitBegin = true; transaction = true; }
     if (['COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'].includes(verb)) {
       transaction = true;

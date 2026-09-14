@@ -137,3 +137,12 @@ test("pagination defaults to a unique order and appends tie breakers", () => {
   table.columns[0].notNull = false;
   expect(orderBySql(paginationSorts(table, []))).toBe(' ORDER BY "id" ASC, "group" ASC, CAST("payload" AS TEXT) ASC');
 });
+
+test('SQLite infinity spellings coerce to wire-encoded REAL infinities', () => {
+  expect(coerceCellValue('Infinity', 'REAL')).toEqual({ __ternWire: { kind: 'number', value: 'Infinity' } });
+  expect(coerceCellValue('-Infinity', 'DOUBLE')).toEqual({ __ternWire: { kind: 'number', value: '-Infinity' } });
+  expect(coerceCellValue('+Infinity', 'FLOAT')).toEqual({ __ternWire: { kind: 'number', value: 'Infinity' } });
+  expect(coerceCellValue('Infinity', 'text')).toBe('Infinity');
+  expect(coerceCellValue('inf', 'REAL')).toBe('inf');
+  expect(coerceCellValue('1.5', 'REAL')).toBe(1.5);
+});

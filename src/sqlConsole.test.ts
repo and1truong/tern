@@ -183,3 +183,10 @@ test("PostgreSQL TABLE shorthand is read-only unless it locks rows", () => {
   expect(isWriteSql('TABLE public.users FOR UPDATE', 'postgres')).toBe(true);
   expect(isWriteSql('TABLE public.users', 'sqlite')).toBe(true);
 });
+
+test('read-write transaction starts require the writable route', () => {
+  expect(executionUnits(['BEGIN READ WRITE', 'SELECT 1', 'COMMIT'], 'postgres').readOnly).toBe(false);
+  expect(executionUnits(['START TRANSACTION READ WRITE', 'COMMIT'], 'postgres').readOnly).toBe(false);
+  expect(executionUnits(['BEGIN READ ONLY', 'SELECT 1', 'COMMIT'], 'postgres').readOnly).toBe(true);
+  expect(executionUnits(['START TRANSACTION ISOLATION LEVEL SERIALIZABLE', 'COMMIT'], 'postgres').readOnly).toBe(true);
+});

@@ -101,6 +101,7 @@ export function parseCsv(text: string): { columns: string[]; rows: Record<string
   record.push(value);
   if (recordStarted) records.push(record);
   const columns = records.shift() ?? [];
+  if (columns[0]?.startsWith("﻿")) columns[0] = columns[0].slice(1);
   if (!columns.length || columns.some((column) => !column)) throw new Error("CSV must have a non-empty header row");
   if (new Set(columns).size !== columns.length) throw new Error("CSV header names must be unique");
   const rows = records.map((cells, rowIndex) => {

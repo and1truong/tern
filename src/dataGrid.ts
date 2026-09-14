@@ -1,5 +1,6 @@
 import { serializeRows } from "./dataTransfer.ts";
 import { quoteIdent } from "./sqlIdentifiers.ts";
+import { encodeDbValue } from "../binaryValues.ts";
 import type { DbTable, RowChange } from "../shared.ts";
 
 export type SortDirection = "asc" | "desc";
@@ -64,6 +65,7 @@ export function coerceCellValue(raw: string, type: string): unknown {
     return Number.isSafeInteger(number) ? number : value;
   }
   if (/\b(REAL|FLOAT|DOUBLE)\b/i.test(type) && value !== "") {
+    if (/^[+-]?infinity$/i.test(value)) return encodeDbValue(Number(`${value.startsWith("-") ? "-" : "+"}Infinity`));
     const number = Number(value);
     return Number.isFinite(number) ? number : raw;
   }
