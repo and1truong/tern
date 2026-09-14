@@ -428,12 +428,16 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     }));
 
     const trg = await db.unsafe(
-      `SELECT DISTINCT trigger_schema AS schema, event_object_table AS table_name,
-              trigger_name AS name, action_timing AS timing, event_manipulation AS event,
-              action_statement AS sql
-         FROM information_schema.triggers
-        WHERE trigger_schema NOT IN ('pg_catalog','information_schema')
-        ORDER BY trigger_name`,
+      `SELECT n.nspname AS schema, c.relname AS table_name, t.tgname AS name,
+              CASE WHEN t.tgtype & 2 <> 0 THEN 'BEFORE' WHEN t.tgtype & 64 <> 0 THEN 'INSTEAD OF' ELSE 'AFTER' END AS timing,
+              concat_ws(' OR ', CASE WHEN t.tgtype & 4 <> 0 THEN 'INSERT' END, CASE WHEN t.tgtype & 16 <> 0 THEN 'UPDATE' END,
+                CASE WHEN t.tgtype & 8 <> 0 THEN 'DELETE' END, CASE WHEN t.tgtype & 32 <> 0 THEN 'TRUNCATE' END) AS event,
+              pg_get_triggerdef(t.oid) AS sql, t.tgenabled AS enabled, t.tgparentid = 0 AS local
+         FROM pg_trigger t
+         JOIN pg_class c ON c.oid = t.tgrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema')
+        ORDER BY t.tgname`,
     ) as Record<string, unknown>[];
     const triggers = trg.map((r) => ({
       name: String(r.name), schema: String(r.schema), table: String(r.table_name),
@@ -499,6 +503,13 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       t.ddl = [...sequenceDdl, t.ddl, ...ownershipDdl].join("\n");
       if (metadata.partition_bound) t.ddl += `\nALTER TABLE ${metadata.parent_relation} ATTACH PARTITION ${relation} ${metadata.partition_bound};`;
       for (const index of idx.filter(index => index.schema === t.schema && index.table_name === t.name && !index.constraint_backed)) t.ddl += `\n${index.sql};`;
+      for (const trigger of trg.filter(trigger => trigger.schema === t.schema && trigger.table_name === t.name)) {
+        if (trigger.local) t.ddl += `\n${trigger.sql};`;
+        if (trigger.enabled !== 'O' || !trigger.local) {
+          const mode = trigger.enabled === 'D' ? 'DISABLE' : trigger.enabled === 'R' ? 'ENABLE REPLICA' : trigger.enabled === 'A' ? 'ENABLE ALWAYS' : 'ENABLE';
+          t.ddl += `\nALTER TABLE ${relation} ${mode} TRIGGER "${String(trigger.name).replace(/"/g, '""')}";`;
+        }
+      }
     }
 
     const sequenceRows = await db.unsafe(

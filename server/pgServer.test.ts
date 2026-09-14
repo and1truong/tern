@@ -84,6 +84,44 @@ pgDescribe("pgServer (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
+  test("partition DDL preserves cloned trigger enabled overrides", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_child_trigger_test');
+    try {
+      await runPgExec(url, `CREATE TABLE pgserver_child_trigger_test.parent(v integer) PARTITION BY RANGE(v);
+        CREATE FUNCTION pgserver_child_trigger_test.bump() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN NEW.v := NEW.v + 1; RETURN NEW; END $$;
+        CREATE TRIGGER bump BEFORE INSERT ON pgserver_child_trigger_test.parent FOR EACH ROW EXECUTE FUNCTION pgserver_child_trigger_test.bump();
+        CREATE TABLE pgserver_child_trigger_test.child PARTITION OF pgserver_child_trigger_test.parent FOR VALUES FROM (0) TO (100);
+        ALTER TABLE pgserver_child_trigger_test.child DISABLE TRIGGER bump;`);
+      const ddl = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_child_trigger_test' && t.name === 'child')!.ddl!;
+      await runPgExec(url, 'DROP TABLE pgserver_child_trigger_test.child');
+      await runPgExec(url, ddl);
+      await runPgExec(url, 'INSERT INTO pgserver_child_trigger_test.parent VALUES(10)');
+      expect((await runPgQuery(url, 'SELECT v FROM pgserver_child_trigger_test.child', [])).rows).toEqual([{ v: 10 }]);
+      expect((await runPgQuery(url, "SELECT tgenabled::text AS enabled FROM pg_trigger WHERE tgrelid='pgserver_child_trigger_test.child'::regclass AND tgname='bump'", [])).rows).toEqual([{ enabled: 'D' }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_child_trigger_test CASCADE'); }
+  });
+
+  test("table DDL replays trigger behavior and enabled state", async () => {
+    await runPgExec(url, 'CREATE SCHEMA pgserver_trigger_test');
+    try {
+      await runPgExec(url, `CREATE TABLE pgserver_trigger_test.t(v integer);
+        CREATE FUNCTION pgserver_trigger_test.bump() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN NEW.v := NEW.v + 1; RETURN NEW; END $$;
+        CREATE TRIGGER bump BEFORE INSERT OR UPDATE ON pgserver_trigger_test.t FOR EACH ROW EXECUTE FUNCTION pgserver_trigger_test.bump();
+        CREATE TRIGGER skipped BEFORE INSERT ON pgserver_trigger_test.t FOR EACH ROW EXECUTE FUNCTION pgserver_trigger_test.bump();
+        ALTER TABLE pgserver_trigger_test.t ENABLE ALWAYS TRIGGER bump;
+        ALTER TABLE pgserver_trigger_test.t DISABLE TRIGGER skipped;`);
+      const ddl = (await readPgSchema(url)).tables.find(t => t.schema === 'pgserver_trigger_test' && t.name === 't')!.ddl!;
+      await runPgExec(url, 'DROP TABLE pgserver_trigger_test.t');
+      await runPgExec(url, ddl);
+      await runPgExec(url, 'INSERT INTO pgserver_trigger_test.t VALUES(10)');
+      expect((await runPgQuery(url, 'SELECT v FROM pgserver_trigger_test.t', [])).rows).toEqual([{ v: 11 }]);
+      expect((await runPgQuery(url, "SELECT tgname, tgenabled::text AS enabled FROM pg_trigger WHERE tgrelid='pgserver_trigger_test.t'::regclass ORDER BY tgname", [])).rows).toEqual([{ tgname: 'bump', enabled: 'A' }, { tgname: 'skipped', enabled: 'D' }]);
+    } finally { await runPgExec(url, 'DROP SCHEMA pgserver_trigger_test CASCADE'); }
+  });
+
+
   test("table DDL retains standalone indexes and reports unsupported ordering", async () => {
     await runPgExec(url, 'CREATE SCHEMA pgserver_indexes_test');
     try {
