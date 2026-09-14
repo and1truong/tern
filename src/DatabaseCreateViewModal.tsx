@@ -7,7 +7,7 @@ import type { QueryResult } from "../shared.ts";
 import { unwrapDbValueForDisplay } from "../binaryValues.ts";
 import { firstSqlVerb, isWriteSql, splitSqlStatements } from "./sqlConsole.ts";
 
-export function validateViewQuery(body: string, dialect: DbSource["kind"]): string {
+export function validateViewQuery(body: string, dialect: "sqlite" | "postgres"): string {
   const statements = splitSqlStatements(body, dialect);
   if (statements.length !== 1 || !["SELECT", "WITH", "VALUES"].includes(firstSqlVerb(statements[0].sql, dialect)) || isWriteSql(statements[0].sql, dialect)) {
     throw new Error("View body must contain exactly one read-only SELECT, WITH, or VALUES query.");
@@ -29,14 +29,14 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const createDdl = (query: string) => `CREATE VIEW${ifne && source.kind === "sqlite" ? " IF NOT EXISTS" : ""} "${name.replace(/"/g, '""')}" AS ${query}`;
   let ddl = "";
   let validationError = "";
-  try { ddl = createDdl(validateViewQuery(body, source.kind)); }
+  try { ddl = createDdl(validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres")); }
   catch (error) { if (body.trim()) validationError = String(error); }
   const canCreate = name.trim() && body.trim();
 
   const runPreview = async () => {
     setBusy(true); setErr(null);
     try {
-      setPreview(await dbApi.query(source, validateViewQuery(body, source.kind), [], 100));
+      setPreview(await dbApi.query(source, validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres"), [], 100));
     } catch (e) { setPreview(null); setErr(String(e)); }
     finally { setBusy(false); }
   };
@@ -44,7 +44,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const create = async () => {
     setBusy(true); setErr(null);
     try {
-      await dbApi.exec(source, createDdl(validateViewQuery(body, source.kind)), true);
+      await dbApi.exec(source, createDdl(validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres")), true);
       onCreated();
       onClose();
     } catch (e) { setErr(String(e)); }
