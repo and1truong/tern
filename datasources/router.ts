@@ -124,6 +124,9 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           case "/key/op": {
             const op = body.op;
             if (!op || typeof op !== "object") throw new DbError("not_found", "Invalid key operation");
+            // Every key mutation is a write: require the enabled-write session.
+            const { key: opKey } = connKey(body);
+            if (!req.writable(opKey)) throw new DbError("not_read_only", "Connection is read-only");
             return await withSession(body, async (session) => {
               if (!session.explorer) throw new DbError("not_found", "This source has no key explorer");
               return session.explorer.keyOp(op as never);

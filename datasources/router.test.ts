@@ -106,6 +106,16 @@ describe("datasource router", () => {
     expect((await op.json())).toMatchObject({ ok: true });
   });
 
+  test("/key/op requires an explicitly writable session", async () => {
+    const { driver } = fakeDriver();
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    const denied = await router.route(makeRequest("/key/op", { connId: "p1", op: { op: "delete", keys: ["a"] } }, () => false));
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { code: string }).code).toBe("not_read_only");
+  });
+
   test("invalidate closes sessions for a deleted profile", async () => {
     let closed = false;
     const { driver } = fakeDriver({ session: { close: async () => { closed = true; } } });
