@@ -13,6 +13,8 @@ export interface CommandArgSpec {
   enum?: string[];        // for type "enum": literal tokens
   optional?: boolean;
   multiple?: boolean;     // repeats; a trailing key spec with multiple covers variadic key lists
+  /** alternates with the previous multiple spec, e.g. HSET field,value pairs */
+  interleaved?: boolean;
 }
 
 export interface CommandDoc {
@@ -64,8 +66,8 @@ export const commandCatalog: CommandDoc[] = [
   { name: "SETNX", group: "string", arity: 3, summary: "Set the value of a key only when it does not exist", since: "1.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "value", type: "string" }], returns: "1 set · 0 key existed.", ttl: "none" },
   { name: "SETEX", group: "string", arity: 4, summary: "Set a key's value with an expiry in seconds", since: "2.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "seconds", type: "int" }, { name: "value", type: "string" }], returns: '"OK".', ttl: "set" },
   { name: "PSETEX", group: "string", arity: 4, summary: "Set a key's value with an expiry in milliseconds", since: "2.6.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "milliseconds", type: "int" }, { name: "value", type: "string" }], returns: '"OK".', ttl: "set" },
-  { name: "MSET", group: "string", arity: -3, summary: "Set multiple keys to multiple values atomically", since: "1.0.1", access: "write", complexity: "O(N)", args: [{ name: "key", type: "key", multiple: true }, { name: "value", type: "string" }], returns: '"OK". Always applies all values (no conditions).', ttl: "clear", notes: "In cluster mode the keys must share a hash slot." },
-  { name: "MSETNX", group: "string", arity: -3, summary: "Set multiple keys only when none of them exist", since: "1.0.1", access: "write", complexity: "O(N)", args: [{ name: "key", type: "key", multiple: true }, { name: "value", type: "string" }], returns: "1 all set · 0 none set.", ttl: "clear" },
+  { name: "MSET", group: "string", arity: -3, summary: "Set multiple keys to multiple values atomically", since: "1.0.1", access: "write", complexity: "O(N)", args: [{ name: "key", type: "key", multiple: true }, { name: "value", type: "string", interleaved: true }], returns: '"OK". Always applies all values (no conditions).', ttl: "clear", notes: "In cluster mode the keys must share a hash slot." },
+  { name: "MSETNX", group: "string", arity: -3, summary: "Set multiple keys only when none of them exist", since: "1.0.1", access: "write", complexity: "O(N)", args: [{ name: "key", type: "key", multiple: true }, { name: "value", type: "string", interleaved: true }], returns: "1 all set · 0 none set.", ttl: "clear" },
   { name: "MGET", group: "string", arity: -2, summary: "Get the values of multiple keys", since: "1.0.0", access: "read", complexity: "O(N)", args: [{ name: "key", type: "key", multiple: true }], returns: "Array of values, nil for missing or non-string keys." },
   { name: "INCR", group: "string", arity: 2, summary: "Increment the integer value of a key by one", since: "1.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }], returns: "The value after the increment; error when the value is not an integer." },
   { name: "INCRBY", group: "string", arity: 3, summary: "Increment the integer value of a key by an amount", since: "1.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "increment", type: "int" }], returns: "The value after the increment." },
@@ -81,7 +83,7 @@ export const commandCatalog: CommandDoc[] = [
   { name: "GETSET", group: "string", arity: 3, summary: "Set a key's value and return the previous value", since: "1.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "value", type: "string" }], returns: "The old value, or nil when the key was missing.", ttl: "clear" },
 
   // --- hashes ---
-  { name: "HSET", group: "hash", arity: -4, summary: "Set hash field(s) to value(s), creating the hash if needed", since: "4.0.0", access: "write", complexity: "O(1) per field", args: [{ name: "key", type: "key" }, { name: "field", type: "string", multiple: true, description: "field/value pairs repeat" }, { name: "value", type: "string" }], returns: "Number of fields that were added (new fields only)." },
+  { name: "HSET", group: "hash", arity: -4, summary: "Set hash field(s) to value(s), creating the hash if needed", since: "4.0.0", access: "write", complexity: "O(1) per field", args: [{ name: "key", type: "key" }, { name: "field", type: "string", multiple: true, description: "field/value pairs repeat" }, { name: "value", type: "string", interleaved: true }], returns: "Number of fields that were added (new fields only)." },
   { name: "HGET", group: "hash", arity: 3, summary: "Get one hash field's value", since: "2.0.0", access: "read", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "field", type: "string" }], returns: "The value, or nil when the field is missing." },
   { name: "HGETALL", group: "hash", arity: 2, summary: "Get every field and value of a hash", since: "2.0.0", access: "read", complexity: "O(N)", args: [{ name: "key", type: "key" }], returns: "Flat [field, value, …] array.", notes: "Reads the entire hash; large hashes can produce huge replies. Page with HSCAN instead." },
   { name: "HMGET", group: "hash", arity: -2, summary: "Get the values of specific hash fields", since: "2.0.0", access: "read", complexity: "O(N)", args: [{ name: "key", type: "key" }, { name: "field", type: "string", multiple: true }], returns: "Array of values, nil for missing fields." },
@@ -137,7 +139,7 @@ export const commandCatalog: CommandDoc[] = [
   { name: "SSCAN", group: "set", arity: -3, summary: "Incrementally iterate set members", since: "2.8.0", access: "read", complexity: "O(1) per call", args: [{ name: "key", type: "key" }, { name: "cursor", type: "int" }, { name: "MATCH", type: "enum", enum: ["MATCH"], optional: true }, { name: "pattern", type: "pattern", optional: true }, { name: "COUNT", type: "enum", enum: ["COUNT"], optional: true }, { name: "count", type: "int", optional: true }], returns: "[next-cursor, [members…]]." },
 
   // --- sorted sets ---
-  { name: "ZADD", group: "sorted-set", arity: -4, summary: "Add members with scores to a sorted set, updating existing members", since: "1.2.0", access: "write", complexity: "O(log(N)) per member", args: [{ name: "key", type: "key" }, { name: "flags", type: "enum", enum: ["NX", "XX", "GT", "LT", "CH", "INCR"], optional: true, multiple: true, description: "NX new only · XX existing only · GT/LT update conditionally · CH count changed · INCR increment" }, { name: "score", type: "double", multiple: true, description: "score/member pairs repeat" }, { name: "member", type: "string" }], returns: "Number added (or changed with CH), or the new score with INCR.", notes: "GT, LT and NX are mutually exclusive." },
+  { name: "ZADD", group: "sorted-set", arity: -4, summary: "Add members with scores to a sorted set, updating existing members", since: "1.2.0", access: "write", complexity: "O(log(N)) per member", args: [{ name: "key", type: "key" }, { name: "flags", type: "enum", enum: ["NX", "XX", "GT", "LT", "CH", "INCR"], optional: true, multiple: true, description: "NX new only · XX existing only · GT/LT update conditionally · CH count changed · INCR increment" }, { name: "score", type: "double", multiple: true, description: "score/member pairs repeat" }, { name: "member", type: "string", interleaved: true }], returns: "Number added (or changed with CH), or the new score with INCR.", notes: "GT, LT and NX are mutually exclusive." },
   { name: "ZCARD", group: "sorted-set", arity: 2, summary: "Count the members of a sorted set", since: "1.2.0", access: "read", complexity: "O(1)", args: [{ name: "key", type: "key" }], returns: "Cardinality, 0 when missing." },
   { name: "ZCOUNT", group: "sorted-set", arity: 4, summary: "Count members with scores inside a range", since: "2.0.0", access: "read", complexity: "O(log(N))", args: [{ name: "key", type: "key" }, { name: "min", type: "string", description: 'score or "-inf", "(" for exclusive' }, { name: "max", type: "string", description: 'score or "+inf", "(" for exclusive' }], returns: "Member count." },
   { name: "ZINCRBY", group: "sorted-set", arity: 4, summary: "Increment a member's score", since: "1.2.0", access: "write", complexity: "O(log(N))", args: [{ name: "key", type: "key" }, { name: "increment", type: "double" }, { name: "member", type: "string" }], returns: "The member's new score as a string." },
@@ -166,7 +168,7 @@ export const commandCatalog: CommandDoc[] = [
   { name: "ZDIFF", group: "sorted-set", arity: -3, summary: "Return members of the first sorted set minus the others", since: "6.2.0", access: "read", complexity: "O(N)", args: [{ name: "numkeys", type: "int" }, { name: "key", type: "key", multiple: true }, { name: "WITHSCORES", type: "enum", enum: ["WITHSCORES"], optional: true }], returns: "Array of members." },
 
   // --- streams ---
-  { name: "XADD", group: "stream", arity: -5, summary: "Append an entry to a stream, creating it when needed", since: "5.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "flags", type: "enum", enum: ["NOMKSTREAM"], optional: true }, { name: "MAXLEN", type: "enum", enum: ["MAXLEN", "MINID"], optional: true, description: "Trim the stream while appending" }, { name: "threshold", type: "string", optional: true }, { name: "id", type: "string", description: '"*" auto-generates the entry id' }, { name: "field", type: "string", multiple: true, description: "field/value pairs repeat" }, { name: "value", type: "string" }], returns: "The new entry id." },
+  { name: "XADD", group: "stream", arity: -5, summary: "Append an entry to a stream, creating it when needed", since: "5.0.0", access: "write", complexity: "O(1)", args: [{ name: "key", type: "key" }, { name: "flags", type: "enum", enum: ["NOMKSTREAM"], optional: true }, { name: "MAXLEN", type: "enum", enum: ["MAXLEN", "MINID"], optional: true, description: "Trim the stream while appending" }, { name: "threshold", type: "string", optional: true }, { name: "id", type: "string", description: '"*" auto-generates the entry id' }, { name: "field", type: "string", multiple: true, description: "field/value pairs repeat" }, { name: "value", type: "string", interleaved: true }], returns: "The new entry id." },
   { name: "XLEN", group: "stream", arity: 2, summary: "Count the entries in a stream", since: "5.0.0", access: "read", complexity: "O(1)", args: [{ name: "key", type: "key" }], returns: "Entry count, 0 when missing." },
   { name: "XRANGE", group: "stream", arity: -4, summary: "Return stream entries within an id range", since: "5.0.0", access: "read", complexity: "O(N) with N returned", args: [{ name: "key", type: "key" }, { name: "start", type: "string", description: 'id, "-" for the smallest' }, { name: "end", type: "string", description: 'id, "+" for the largest; "(" prefix excludes (6.2+)' }, { name: "COUNT", type: "enum", enum: ["COUNT"], optional: true }, { name: "count", type: "int", optional: true }], returns: "Entries as [id, [field, value, …]]." },
   { name: "XREVRANGE", group: "stream", arity: -4, summary: "Return stream entries in reverse within an id range", since: "5.0.0", access: "read", complexity: "O(N) with N returned", args: [{ name: "key", type: "key" }, { name: "end", type: "string", description: 'id, "+" for the largest' }, { name: "start", type: "string", description: 'id, "-" for the smallest; "(" prefix excludes (6.2+)' }, { name: "COUNT", type: "enum", enum: ["COUNT"], optional: true }, { name: "count", type: "int", optional: true }], returns: "Entries as [id, [field, value, …]]." },
@@ -262,27 +264,54 @@ export function blockingTimeoutSeconds(doc: CommandDoc, args: string[]): number 
   return Number.isFinite(seconds) ? seconds : null;
 }
 
-// Keys referenced by a parsed command, derived from args specs (type "key").
-// Exported for explain/lint cluster analysis and key-name autocompletion.
-export function commandKeys(doc: CommandDoc, args: string[]): string[] {
+// Pair every command token with the arg spec it fills. Handles the syntax
+// shapes the catalog uses: fixed positions, repeated flags (enum multiple
+// consumes only its own literals), trailing variadic keys, and interleaved
+// pairs (HSET/MSET field,value · ZADD score,member · XADD field,value).
+export function argRoles(doc: CommandDoc, args: string[]): { token: string; spec: CommandArgSpec | null }[] {
   const specs = doc.args ?? [];
-  if (!specs.length) return [];
-  const lastSpecIndex = specs.length - 1;
+  if (!specs.length) return args.map(token => ({ token, spec: null }));
+  const roles: { token: string; spec: CommandArgSpec | null }[] = [];
   let token = 0;
-  const keys: string[] = [];
-  for (let s = 0; s < specs.length; s++) {
+  for (let s = 0; s < specs.length && token < args.length; s++) {
     const spec = specs[s]!;
-    if (token >= args.length && !spec.multiple) break;
+    const next = specs[s + 1];
     if (spec.multiple) {
-      // A non-final multiple spec leaves room for the specs after it.
-      const laterRequired = specs.slice(s + 1).filter(a => !a.optional).length;
-      const end = s === lastSpecIndex ? args.length : args.length - laterRequired;
-      if (spec.type === "key") keys.push(...args.slice(token, Math.max(token, end)));
-      token = Math.max(token, end);
+      if (spec.enum?.length) {
+        // Repeated flags: consume only consecutive tokens that are one of the
+        // spec's literals (e.g. ZADD's NX/GT/CH run before the score pairs).
+        while (token < args.length && spec.enum.some(v => v.toUpperCase() === args[token]!.toUpperCase())) {
+          roles.push({ token: args[token++]!, spec });
+        }
+        continue;
+      }
+      const interleaved = next?.interleaved === true;
+      const laterRequired = specs.slice(s + 1).filter(a => !a.optional && !a.interleaved).length;
+      const end = s === specs.length - 1 ? args.length : args.length - laterRequired;
+      if (interleaved) {
+        while (token < end) {
+          roles.push({ token: args[token]!, spec });
+          if (args[token + 1] !== undefined) roles.push({ token: args[token + 1]!, spec: next! });
+          token += 2;
+        }
+        s++; // the pair partner was consumed alongside
+      } else {
+        const stop = Math.max(token, end);
+        for (; token < stop; token++) roles.push({ token: args[token]!, spec });
+      }
     } else {
-      if (spec.type === "key" && args[token] !== undefined) keys.push(args[token]!);
+      roles.push({ token: args[token]!, spec });
       token++;
     }
   }
-  return keys;
+  for (; token < args.length; token++) roles.push({ token: args[token]!, spec: null });
+  return roles;
+}
+
+// Keys referenced by a parsed command, derived from args specs (type "key").
+// Exported for explain/lint cluster analysis and key-name autocompletion.
+export function commandKeys(doc: CommandDoc, args: string[]): string[] {
+  return argRoles(doc, args)
+    .filter(r => r.spec?.type === "key")
+    .map(r => r.token);
 }

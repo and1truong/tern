@@ -1,7 +1,7 @@
 // Redis has no EXPLAIN — Tern explains commands from the built-in catalog:
 // semantics, access classification, complexity, blocking behavior, TTL side
 // effects, cluster implications and safety risks. Pure and offline.
-import { blockingTimeoutSeconds, lookupCommand, commandKeys } from "./catalog.ts";
+import { blockingTimeoutSeconds, lookupCommand, commandKeys, argRoles, type CommandDoc } from "./catalog.ts";
 import { tokenizeCommand } from "./resp.ts";
 import type { Capabilities } from "../../shared.ts";
 
@@ -78,29 +78,12 @@ function unknownExplanation(name: string, note: string): CommandExplanation {
   };
 }
 
-function mapArgs(doc: { args?: import("./catalog.ts").CommandArgSpec[] }, args: string[]): { token: string; meaning: string }[] {
-  const specs = doc.args ?? [];
-  if (!specs.length) return args.map(token => ({ token, meaning: "argument" }));
-  const lastSpecIndex = specs.length - 1;
-  let token = 0;
-  const out: { token: string; meaning: string }[] = [];
-  for (let s = 0; s < specs.length && token < args.length; s++) {
-    const spec = specs[s]!;
-    const meaningOf = () => {
-      const base = spec.description ?? spec.enum?.join(" | ") ?? spec.type ?? "";
-      return `${spec.name}${base ? ` — ${base}` : ""}`;
-    };
-    if (spec.multiple) {
-      const laterRequired = specs.slice(s + 1).filter(a => !a.optional).length;
-      const end = s === lastSpecIndex ? args.length : args.length - laterRequired;
-      for (; token < Math.max(token, end); token++) out.push({ token: args[token]!, meaning: meaningOf() });
-    } else {
-      out.push({ token: args[token]!, meaning: meaningOf() });
-      token++;
-    }
-  }
-  for (; token < args.length; token++) out.push({ token: args[token]!, meaning: "additional argument" });
-  return out;
+function mapArgs(doc: CommandDoc, args: string[]): { token: string; meaning: string }[] {
+  return argRoles(doc, args).map(({ token, spec }) => {
+    if (!spec) return { token, meaning: "additional argument" };
+    const base = spec.description ?? spec.enum?.join(" | ") ?? spec.type ?? "";
+    return { token, meaning: `${spec.name}${base ? ` — ${base}` : ""}` };
+  });
 }
 
 // Cluster slot affinity: "{user1}.profile" hashes "user1"; keys without a
