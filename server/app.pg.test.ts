@@ -54,3 +54,27 @@ test.skipIf(!url)('standalone PostgreSQL profile, database selection, read-only,
     db.close();
   }
 }, 15000);
+
+test.skipIf(!url)('migration dry-run approval is bound to the selected schema', async () => {
+  const db = openAppDatabase(':memory:');
+  const secrets = new Map<string, string>();
+  const app = makeApp(db, { secrets: { get: async k => secrets.get(k) ?? null, set: async (k, v) => { secrets.set(k, v); }, delete: async k => secrets.delete(k) } });
+  const post = (route: string, body: unknown) => app(new Request(`http://localhost/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  const profile = await (await post('connections', { label: 'Schema gate', url, readOnly: true })).json();
+  const source = { connId: profile.id };
+  await post('access', { ...source, writable: true });
+  try {
+    expect((await post('exec', { ...source, sql: 'CREATE SCHEMA tern_gate_a; CREATE SCHEMA tern_gate_b', allowWrite: true })).ok).toBe(true);
+    const migration = { ...source, sql: 'CREATE TABLE gated(id int)', schema: 'tern_gate_a', allowWrite: true };
+    expect((await post('migration/preview', migration)).ok).toBe(true);
+    const wrong = await post('migration/apply', { ...migration, schema: 'tern_gate_b' });
+    expect(wrong.status).toBe(400);
+    expect((await wrong.json()).error).toContain('dry run');
+    expect((await post('migration/apply', migration)).ok).toBe(true);
+    const query = await post('query', { ...source, schema: 'tern_gate_b', sql: "SELECT to_regclass('gated') AS name" });
+    expect((await query.json()).rows[0].name).toBeNull();
+  } finally {
+    await post('exec', { ...source, sql: 'DROP SCHEMA IF EXISTS tern_gate_a CASCADE; DROP SCHEMA IF EXISTS tern_gate_b CASCADE', allowWrite: true });
+    db.close();
+  }
+});

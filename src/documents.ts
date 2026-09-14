@@ -13,5 +13,5 @@ export function isDocuments(value: unknown): value is { tabs: Document[]; active
   const state = value as { tabs?: Document[]; active?: string };
   return typeof state.active === 'string' && Array.isArray(state.tabs) && state.tabs.every(d =>
     d && typeof d.id === 'string' && typeof d.title === 'string' && ['table', 'sql', 'diagram', 'insights', 'migration', 'settings'].includes(d.kind) &&
-    d.source && (d.source.kind === 'sqlite' ? typeof d.source.path === 'string' : d.source.kind === 'postgres' && typeof d.source.connId === 'string'));
+    d.source && (d.source.kind === 'sqlite' ? typeof d.source.path === 'string' : d.source.kind === 'postgres' && typeof d.source.connId === 'string' && (d.source.schema === undefined || typeof d.source.schema === 'string')));
 }

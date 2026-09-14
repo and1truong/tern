@@ -73,6 +73,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
       if (body.connId) {
         if (!await connections.get(body.connId)) return fail("Unknown connection", 404);
         if (body.database !== undefined && (typeof body.database !== "string" || body.database.length > 256)) return fail("Invalid database name");
+        if (body.schema !== undefined && (typeof body.schema !== "string" || !body.schema || body.schema.includes("\0") || new TextEncoder().encode(body.schema).length > 63)) return fail("Invalid schema name");
         key = `${body.connId}/${body.database ?? ""}`;
         connections.touch(body.connId);
       } else if (body.path) {
@@ -106,11 +107,11 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
       if (path === "/migration/preview") {
         validated.delete(accessKey);
         const result = await h.migration(forwarded, false);
-        if (result.ok) validated.set(accessKey, body.sql);
+        if (result.ok) validated.set(accessKey, JSON.stringify([body.schema ?? null, body.sql]));
         return result;
       }
       if (path === "/migration/apply") {
-        if (validated.get(accessKey) !== body.sql) return fail("Run a successful dry run of this exact script before applying");
+        if (validated.get(accessKey) !== JSON.stringify([body.schema ?? null, body.sql])) return fail("Run a successful dry run of this exact script before applying");
         validated.delete(accessKey);
         return h.migration(forwarded, true);
       }
