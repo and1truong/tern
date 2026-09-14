@@ -4,13 +4,20 @@ import { makeConnections, type SecretStore } from "./connections.ts";
 import { makeHandlers } from "./routeHandlers.ts";
 import { recentFiles, sqlitePath } from "./appDatabase.ts";
 import { readSchema } from "./dbServer.ts";
+import { createDriverRegistry } from "../datasources/registry.ts";
+import { makeDatasourceRouter } from "../datasources/router.ts";
+import { makeRedisDriver } from "../datasources/redis/driver.ts";
+import type { DataSourceDriver } from "../datasources/contracts.ts";
 
-export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?: string } = {}) {
+export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?: string; drivers?: DataSourceDriver[] } = {}) {
   const appFile = options.appPath ? statSync(options.appPath, { bigint: true }) : null;
   const connections = makeConnections(db, options.secrets);
   const writable = new Set<string>();
   const opened = new Set<string>();
   const validated = new Map<string, string>();
+  const registry = createDriverRegistry();
+  for (const driver of options.drivers ?? [makeRedisDriver()]) registry.register(driver);
+  const datasource = makeDatasourceRouter(connections, registry);
 
   const fail = (error: string, status = 400) => Response.json({ error }, { status });
   return async (req: Request): Promise<Response> => {
@@ -38,7 +45,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
         }
         if (req.method === "POST") {
           const { key, value } = await req.json();
-          if (typeof key !== "string" || key.length > 200 || !/^(documents|sql:|layout|preferences)/.test(key)) return fail("Invalid state key");
+          if (typeof key !== "string" || key.length > 200 || !/^(documents|sql:|redis:|layout|preferences)/.test(key)) return fail("Invalid state key");
           const json = JSON.stringify(value);
           if (!json || json.length > 2_000_000) return fail("State exceeds size limit");
           db.query("INSERT INTO app_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, json);
@@ -69,6 +76,18 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
       }
       if (path === "/connections/test" && req.method === "POST") return h.connectionTest(req);
       const body = req.method === "POST" ? await req.clone().json() : Object.fromEntries(url.searchParams);
+      if (path.startsWith("/datasource")) {
+        const sub = path.slice("/datasource".length) || "/";
+        if (sub !== "/test") {
+          if (!body.connId) return fail("A connection is required");
+          if (!await connections.get(body.connId)) return fail("Unknown connection", 404);
+          connections.touch(body.connId);
+        }
+        return datasource.route({
+          path: sub, body, url,
+          writable: (connKey) => writable.has(`${session}:${connKey}`),
+        });
+      }
       let key: string;
       if (body.connId) {
         if (!await connections.get(body.connId)) return fail("Unknown connection", 404);
