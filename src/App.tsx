@@ -1,3 +1,5 @@
+import { SchemaPicker } from "./SchemaPicker.tsx";
+import { filterSchemaCatalog, isSystemSchema, querySchemaLabel, readSchemaPreferences, schemaPreferenceKey, type SchemaPreference } from "./schemaContext.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Database, Plus, RefreshCw, Terminal, Network, Activity, FileCode } from "lucide-react";
 import { dbApi, type DbSource } from "./dbApi.ts";
@@ -12,6 +14,10 @@ import { tableKey, tableLabel } from "./sqlIdentifiers.ts";
 import { sourceId, sourceLabel, isDocuments, type Document } from "./documents.ts";
 
 export function App() {
+  const preferences = useRef<Record<string, SchemaPreference>>({});
+  const catalogRequests = useRef(new Map<string, number>());
+  const systemCatalogs = useRef(new Set<string>());
+  const [preferenceVersion, setPreferenceVersion] = useState(0);
   const [connections, setConnections] = useState<DbSource[]>([]);
   const [selected, setSelected] = useState<DbSource | null>(null);
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
@@ -40,12 +46,15 @@ export function App() {
     const [pg, sqlite] = await Promise.all([dbApi.connections.list(), dbApi.recent()]);
     setConnections([...pg.connections.map(c => ({ kind: 'postgres' as const, connId: c.id, label: c.label, url: c.url, readOnly: c.readOnly, environment: c.environment })), ...sqlite.databases.map(d => ({ kind: 'sqlite' as const, path: d.path }))]);
   };
-  const connect = async (source: DbSource) => {
+  const connect = async (source: DbSource, includeSystem = false) => {
     const key = sourceId(source);
+    const request = (catalogRequests.current.get(key) ?? 0) + 1;
+    catalogRequests.current.set(key, request);
     setStates(s => ({ ...s, [key]: 'Connecting…' }));
     try {
       if (source.kind === 'sqlite') await dbApi.open(source.path);
-      const schema = await dbApi.schema(source);
+      if (includeSystem || (source.kind === 'postgres' && source.schema && isSystemSchema(source.schema))) systemCatalogs.current.add(key);
+      const schema = await dbApi.schema(source, systemCatalogs.current.has(key));
       if (source.kind === "postgres") {
         const result = await dbApi.databases(source);
         setDatabases(s => ({ ...s, [source.connId]: result.databases }));
@@ -56,32 +65,58 @@ export function App() {
         initializedAccess.current.add(key);
         setWritable(s => ({ ...s, [key]: defaultWritable }));
       }
+      if (catalogRequests.current.get(key) !== request) return schema;
       setSchemas(s => ({ ...s, [key]: schema }));
       setStates(s => ({ ...s, [key]: 'Connected' }));
       return schema;
-    } catch (e) { setStates(s => ({ ...s, [key]: 'Disconnected' })); setError(`${sourceLabel(source)}: ${String(e)}`); return null; }
+    } catch (e) { if (catalogRequests.current.get(key) !== request) return null; setStates(s => ({ ...s, [key]: 'Disconnected' })); setError(`${sourceLabel(source)}: ${String(e)}`); return null; }
   };
   useEffect(() => {
     void refreshConnections().catch(e => setError(String(e)));
-    void dbApi.state.get<unknown>('documents').then(async saved => {
+    void dbApi.state.get<unknown>('schemaPreferences').then(value => {
+      preferences.current = readSchemaPreferences(value);
+      setPreferenceVersion(v => v + 1);
+      return dbApi.state.get<unknown>('documents');
+    }).then(async saved => {
       if (isDocuments(saved)) {
         setTabs(saved.tabs); setActive(saved.active);
+        for (const doc of saved.tabs) if (doc.source.kind === 'postgres' && doc.source.schema && isSystemSchema(doc.source.schema)) systemCatalogs.current.add(sourceId(doc.source));
         const unique = new Map(saved.tabs.map(d => [sourceId(d.source), d.source]));
         setSelected(saved.tabs.find(d => d.id === saved.active)?.source ?? null);
-        await Promise.all([...unique.values()].map(connect));
+        await Promise.all([...unique.values()].map(s => connect(s, s.kind === "postgres" && preferences.current[schemaPreferenceKey(s)]?.showSystem)));
       }
       setReady(true);
     }).catch(e => setError(String(e)));
     void dbApi.state.get<{ sidebar: number }>('layout').then(value => { if (value?.sidebar) setSidebar(Math.max(180, Math.min(440, value.sidebar))); });
   }, []);
+  useEffect(() => { if (ready) void dbApi.state.set('schemaPreferences', preferences.current).catch(e => setError(String(e))); }, [preferenceVersion, ready]);
   useEffect(() => { if (ready) void dbApi.state.set('documents', { tabs, active }).catch(e => setError(String(e))); }, [tabs, active, ready]);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => { if (Object.values(dirty).some(Boolean)) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
+  const selectSource = (next: DbSource) => {
+    if (next.kind === 'postgres') {
+      const pref = preferences.current[schemaPreferenceKey(next)];
+      next = { ...next, schema: pref?.schema };
+      setSelected(next); setActive('');
+      void connect(next, pref?.showSystem);
+    } else { setSelected(next); setActive(''); void connect(next); }
+  };
+  const schemaPreference = source?.kind === 'postgres' ? preferences.current[schemaPreferenceKey(source)] : undefined;
+  const showSystem = schemaPreference?.showSystem ?? false;
+  const selectSchema = (schema: string | undefined, system = showSystem) => {
+    if (source?.kind !== 'postgres') return;
+    preferences.current = { ...preferences.current, [schemaPreferenceKey(source)]: { schema, showSystem: system } };
+    setPreferenceVersion(v => v + 1);
+    // The selector controls the next document. Existing documents keep their source.
+    const next = { ...source, schema };
+    setSelected(next); setActive('');
+    if (system && !systemCatalogs.current.has(id)) void connect(next, true);
+  };
   const open = (kind: Document['kind'], table?: string) => {
     if (!source || !schemas[id]) return;
-    const existing = tabs.find(t => t.kind === kind && sourceId(t.source) === id && t.table === table && kind !== 'sql');
+    const existing = tabs.find(t => t.kind === kind && sourceId(t.source) === id && t.table === table && (kind !== 'migration' || (t.source.kind === 'postgres' ? t.source.schema : undefined) === (source.kind === 'postgres' ? source.schema : undefined)) && kind !== 'sql');
     if (existing) { setActive(existing.id); return; }
     const title = kind === 'table' ? tableLabel(schemas[id].tables.find(t => tableKey(t) === table)!) : kind === 'sql' ? `Query ${tabs.filter(t => t.kind === 'sql').length + 1}` : ({ diagram: 'Relationships', insights: 'Database Insights', migration: 'Migration Studio', settings: 'Database Settings' } as const)[kind];
     const doc: Document = { id: crypto.randomUUID(), kind, title, source, table };
@@ -143,7 +178,10 @@ export function App() {
     </header>
     <div className="toolbar main-toolbar"><button aria-label="Refresh catalog" disabled={!source} onClick={() => source && void connect(source)}><RefreshCw size={14}/></button><button disabled={!source} onClick={() => open('sql')}><Plus size={14}/>SQL</button><span className="divider"/>
       <button onClick={() => setPicker('postgres')}><Database size={14}/>New connection</button><button onClick={() => setPicker('sqlite')}>Open SQLite</button>
-      {source?.kind === 'postgres' && <select aria-label="Database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1))} onChange={e => { const next = { ...source, database: e.target.value }; setSelected(next); setActive(''); void connect(next); }}>{(databases[source.connId] ?? [decodeURIComponent(new URL(source.url).pathname.slice(1))]).map(name => <option key={name}>{name}</option>)}</select>}
+      {source?.kind === 'postgres' && <select aria-label="Database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1))} onChange={e => { selectSource({ ...source, database: e.target.value, schema: undefined }); }}>{(databases[source.connId] ?? [decodeURIComponent(new URL(source.url).pathname.slice(1))]).map(name => <option key={name}>{name}</option>)}</select>}
+      {source?.kind === 'postgres' && <SchemaPicker key={id} schemas={schemas[id]?.schemas ?? []} selected={source.schema}
+        showSystem={showSystem} loading={states[id] === 'Connecting…'} onSelect={schema => selectSchema(schema)}
+        onShowSystem={show => selectSchema(source.schema, show)} onRefresh={() => void connect(source, showSystem)} />}
       <span className="ml-auto truncate">{source ? sourceLabel(source) : 'No connection'}</span>{source?.kind === 'postgres' && <span className={source.environment === 'production' ? 'production' : 'environment'}>{source.environment}</span>}
       <button disabled={!source} className={writable[id] ? 'production' : 'text-[var(--text-muted)]'} onClick={() => void toggleAccess()}>{writable[id] ? '● Writable' : 'Read Only'}</button>
     </div>
@@ -151,14 +189,14 @@ export function App() {
     {help && <div className="toolbar">⌘/Ctrl+O Open SQLite · ⌘/Ctrl+N New SQL · ⌘/Ctrl+W Close document · ⌘/Ctrl+Enter Run statement · Shift+⌘/Ctrl+Enter Run all<button className="ml-auto" onClick={() => setHelp(false)}>Close</button></div>}
     <div className="workbench-center">
       <aside className="explorer" style={{ width: sidebar }}><div className="explorer-title">CONNECTIONS<button aria-label="Add connection" onClick={() => setPicker('postgres')}>+</button></div>
-        <div className="connections-list">{connections.map(s => <div key={sourceId(s)} className="connection-row"><button className={id === sourceId(s) ? 'selected' : ''} title={s.kind === 'sqlite' ? s.path : s.url} onClick={() => { setSelected(s); setActive(''); void connect(s); }}><Database size={13}/><span className="truncate">{sourceLabel(s)}</span><span className="connection-state">{states[sourceId(s)] === 'Connected' ? '●' : '○'}</span></button><button aria-label={`Remove ${sourceLabel(s)}`} onClick={() => void forget(s)}>×</button></div>)}</div>
-        {source && <><div className="explorer-title database-title">{source.kind === 'sqlite' ? sourceLabel(source) : (source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1)))}<span>{states[id]}</span></div><ObjectTree schema={schemas[id] ?? null} activeTable={current?.table ?? null} onSelect={table => open('table', table)} locked={false}/></>}
+        <div className="connections-list">{connections.map(s => <div key={sourceId(s)} className="connection-row"><button className={id === sourceId(s) ? 'selected' : ''} title={s.kind === 'sqlite' ? s.path : s.url} disabled={!ready} onClick={() => selectSource(s)}><Database size={13}/><span className="truncate">{sourceLabel(s)}</span><span className="connection-state">{states[sourceId(s)] === 'Connected' ? '●' : '○'}</span></button><button aria-label={`Remove ${sourceLabel(s)}`} onClick={() => void forget(s)}>×</button></div>)}</div>
+        {source && <><div className="explorer-title database-title">{source.kind === 'sqlite' ? sourceLabel(source) : (source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1)))}<span>{states[id]}</span></div><ObjectTree key={id} schema={schemas[id] && source.kind === 'postgres' ? filterSchemaCatalog(schemas[id], source.schema, showSystem) : schemas[id] ?? null} activeTable={current?.table ?? null} onSelect={table => open('table', table)} locked={false}/></>}
         {!connections.length && <p className="p-3 text-[var(--text-muted)]">Open a SQLite file or add a PostgreSQL connection to begin.</p>}
       </aside>
       <div role="separator" aria-label="Resize explorer" aria-orientation="vertical" tabIndex={0} className="resize-handle" onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const width = Math.max(180, Math.min(440, sidebar + (e.key === 'ArrowLeft' ? -10 : 10))); setSidebar(width); void dbApi.state.set('layout', { sidebar: width }); } }} onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) setSidebar(Math.max(180, Math.min(440, e.clientX))); }} onPointerUp={e => { e.currentTarget.releasePointerCapture(e.pointerId); void dbApi.state.set('layout', { sidebar }); }}/>
       <section className="document-area">
         <div className="document-tabs" role="tablist">{tabs.map(doc => <div key={doc.id} className={`document-tab ${doc.id === active ? 'selected' : ''}`}><button role="tab" aria-selected={doc.id === active} title={`${doc.title} — ${sourceLabel(doc.source)}`} onClick={() => { setActive(doc.id); setSelected(doc.source); }}>{doc.kind === 'sql' ? <Terminal size={13}/> : doc.kind === 'diagram' ? <Network size={13}/> : doc.kind === 'insights' ? <Activity size={13}/> : <FileCode size={13}/>} {doc.title}{dirty[doc.id] && ' ●'}</button><button aria-label={`Close ${doc.title}`} onClick={() => close(doc)}>×</button></div>)}<button aria-label="New SQL document" disabled={!source} onClick={() => open('sql')}>+</button></div>
-        {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite & PostgreSQL workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button>{source && <><button onClick={() => open('sql')}>New SQL document <kbd>⌘N</kbd></button><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}
+        {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite & PostgreSQL workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button>{source && <>{source.kind === 'postgres' && <p>Query schema: {querySchemaLabel(source)}</p>}<button onClick={() => open('sql')}>New SQL document <kbd>⌘N</kbd></button><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}
         {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={setDirty} onLatency={setLatency} onRefresh={() => void connect(doc.source)} />)}
       </section>
     </div>
@@ -179,7 +217,7 @@ export function App() {
     </dialog>}
     <footer className="statusbar"><span>{source?.kind === 'postgres' ? `PostgreSQL ${schemas[id]?.pragmas.server_version ?? ''}` : source ? `SQLite ${schemas[id]?.pragmas.sqlite_version ?? ''}` : 'Tern'}</span><span>{source?.kind === 'postgres' ? new URL(source.url).host : source?.path ?? 'No database open'}</span><span>{source?.kind === "postgres" ? source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1)) : ""}</span><span className="ml-auto">{states[id] ?? 'Ready'}</span><span className={writable[id] ? 'production' : ''}>{writable[id] ? 'Writable' : 'Read Only'}</span><span>{latency.toFixed(1)} ms</span></footer>
     {createView && source && <DatabaseCreateViewModal source={source} onClose={() => setCreateView(false)} onCreated={() => void connect(source)}/>}
-    {picker && <DatabaseOpenModal initial={picker} onClose={() => setPicker(false)} onOpen={s => { setPicker(false); setSelected(s); setActive(''); void connect(s); void refreshConnections(); }}/ >}
+    {picker && <DatabaseOpenModal initial={picker} onClose={() => setPicker(false)} onOpen={s => { setPicker(false); selectSource(s); void refreshConnections(); }}/ >}
   </main>;
 }
 
@@ -190,6 +228,9 @@ function DocumentView({ doc, visible, schema, writable, onDirty, onLatency, onRe
   const dirty = useCallback((value: boolean) => onDirty(s => s[doc.id] === value ? s : { ...s, [doc.id]: value }), [doc.id, onDirty]);
   const table = schema?.tables.find(t => tableKey(t) === doc.table);
   return <div role="tabpanel" className={visible ? 'document-body' : 'hidden'}>
+    {doc.source.kind === 'postgres' && <div className="toolbar">Query schema: {querySchemaLabel(doc.source)}
+      {doc.source.schema && schema && !schema.schemas?.includes(doc.source.schema) && <span role="alert" className="error">Schema unavailable; open a new document with another schema.</span>}
+    </div>}
     {!schema ? <div className="p-4 text-[var(--text-muted)]">Connection unavailable. Reconnect using the explorer.</div> : <>
       {doc.kind === 'table' && (table ? <TableDocument table={table} schema={schema} source={doc.source} writable={writable} onDirty={dirty} onLatency={onLatency}/> : <div className="p-4">This object no longer exists.</div>)}
       {doc.kind === 'sql' && <SqlEditor documentId={doc.id} source={doc.source} schema={schema} writable={writable} onExeced={onRefresh} onDirty={dirty} onLatency={onLatency}/>}

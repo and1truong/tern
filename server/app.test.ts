@@ -64,3 +64,18 @@ test("standalone API persists state and recent files, denies implicit access/wri
     expect((await post('exec', { path, sql: 'SELECT COUNT(*) AS n FROM users' })).status).toBe(200);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('PostgreSQL schema request fields reject malformed identifiers before connecting', async () => {
+  const db = openAppDatabase(':memory:');
+  const secrets = new Map<string, string>();
+  const app = makeApp(db, { secrets: { get: async k => secrets.get(k) ?? null, set: async (k, v) => { secrets.set(k, v); }, delete: async k => secrets.delete(k) } });
+  const post = (route: string, body: unknown) => app(new Request(`http://localhost/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  try {
+    const profile = await (await post('connections', { label: 'Schema validation', url: 'postgres://localhost/unreachable', readOnly: true })).json();
+    for (const schema of [null, 123, {}, '', 'bad\0name', '界'.repeat(22)]) {
+      const result = await post('query', { connId: profile.id, schema, sql: 'SELECT 1' });
+      expect(result.status).toBe(400);
+      expect((await result.json()).error).toBe('Invalid schema name');
+    }
+  } finally { db.close(); }
+});

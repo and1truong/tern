@@ -56,7 +56,7 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
     async schema(url: URL): Promise<Response> {
       const connId = url.searchParams.get("connId");
       try {
-        if (connId) return Response.json(await readPgSchema(await resolvePgUrl(connId, url.searchParams.get("database") ?? undefined)));
+        if (connId) return Response.json(await readPgSchema(await resolvePgUrl(connId, url.searchParams.get("database") ?? undefined), url.searchParams.get("includeSystem") === "true"));
         return Response.json(readSchema(url.searchParams.get("path") ?? ""));
       } catch (e) { return dbErrorResponse(e); }
     },
@@ -78,31 +78,31 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
 
     // POST /query  body { path? | connId?, sql, params?, limit? }
     async query(req: Request): Promise<Response> {
-      let b: { path?: string; connId?: string; database?: string; sql?: string; params?: unknown[]; limit?: number; offset?: number; timeoutMs?: number; exportAll?: boolean };
+      let b: { path?: string; connId?: string; database?: string; schema?: string; sql?: string; params?: unknown[]; limit?: number; offset?: number; timeoutMs?: number; exportAll?: boolean };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       try {
-        if (b.connId) return Response.json(await runPgQuery(await resolvePgUrl(b.connId, b.database), b.sql ?? "", b.params ?? [], b.limit, b.offset, req.signal, b.timeoutMs, b.exportAll === true));
+        if (b.connId) return Response.json(await runPgQuery(await resolvePgUrl(b.connId, b.database), b.sql ?? "", b.params ?? [], b.limit, b.offset, req.signal, b.timeoutMs, b.exportAll === true, b.schema));
         return Response.json(await sqliteTask({ operation: "query", args: [b.path ?? "", b.sql ?? "", b.params ?? [], b.limit, b.offset, b.exportAll === true] }, req.signal, b.timeoutMs));
       } catch (e) { return dbErrorResponse(e); }
     },
 
     async explain(req: Request): Promise<Response> {
-      let b: { path?: string; connId?: string; database?: string; sql?: string; params?: unknown[]; timeoutMs?: number };
+      let b: { path?: string; connId?: string; database?: string; schema?: string; sql?: string; params?: unknown[]; timeoutMs?: number };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       try {
-        if (b.connId) return Response.json(await explainPgQuery(await resolvePgUrl(b.connId, b.database), b.sql ?? "", b.params ?? [], req.signal, b.timeoutMs));
+        if (b.connId) return Response.json(await explainPgQuery(await resolvePgUrl(b.connId, b.database), b.sql ?? "", b.params ?? [], req.signal, b.timeoutMs, b.schema));
         return Response.json(await sqliteTask({ operation: "explain", args: [b.path ?? "", b.sql ?? "", b.params ?? []] }, req.signal, b.timeoutMs));
       } catch (error) { return dbErrorResponse(error); }
     },
 
     async migration(req: Request, apply: boolean): Promise<Response> {
-      let b: { path?: string; connId?: string; database?: string; sql?: string; allowWrite?: boolean; timeoutMs?: number };
+      let b: { path?: string; connId?: string; database?: string; schema?: string; sql?: string; allowWrite?: boolean; timeoutMs?: number };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       try {
         if (apply && b.allowWrite !== true) throw new DbError("not_read_only", "migration apply requires explicit confirmation");
         if (b.connId) {
           if (apply) await assertPgWritable(b.connId, b.database);
-          return Response.json(await runPgMigration(await resolvePgUrl(b.connId, b.database), b.sql ?? "", apply, b.timeoutMs));
+          return Response.json(await runPgMigration(await resolvePgUrl(b.connId, b.database), b.sql ?? "", apply, b.timeoutMs, b.schema));
         }
         return Response.json(await sqliteTask({ operation: "migration", args: [b.path ?? "", b.sql ?? "", apply] }, req.signal, b.timeoutMs));
       } catch (error) { return dbErrorResponse(error); }
@@ -111,13 +111,13 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
     // POST /exec  body { path? | connId?, sql }
     // allowWrite !== true runs the script as a read-only batch without write access.
     async exec(req: Request): Promise<Response> {
-      let b: { path?: string; connId?: string; database?: string; sql?: string; allowWrite?: boolean; timeoutMs?: number };
+      let b: { path?: string; connId?: string; database?: string; schema?: string; sql?: string; allowWrite?: boolean; timeoutMs?: number };
       try { b = await req.json() as typeof b; } catch { return Response.json({ error: "invalid json" }, { status: 400 }); }
       try {
         const readOnly = b.allowWrite !== true;
         if (b.connId) {
           if (!readOnly) await assertPgWritable(b.connId, b.database);
-          return Response.json(await runPgExec(await resolvePgUrl(b.connId, b.database), b.sql ?? "", req.signal, b.timeoutMs, readOnly));
+          return Response.json(await runPgExec(await resolvePgUrl(b.connId, b.database), b.sql ?? "", req.signal, b.timeoutMs, readOnly, b.schema));
         }
         return Response.json(await sqliteTask({ operation: "exec", args: [b.path ?? "", b.sql ?? "", readOnly] }, req.signal, b.timeoutMs));
       } catch (e) { return dbErrorResponse(e); }

@@ -1,3 +1,4 @@
+import { sqlCompletionSchema } from "./schemaContext.ts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
@@ -80,14 +81,12 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     onDirty(true);
     saveTimer.current = setTimeout(() => { saveTimer.current = null; void dbApi.state.set(storageKey, next).then(() => { if (version === saveVersion.current) onDirty(false); }).catch((e) => setError(String(e))); }, 250);
   };
-  const completionSchema = useMemo(() => Object.fromEntries(schema.tables.map((table) => [
-    table.schema ? `${table.schema}.${table.name}` : table.name,
-    table.columns.map((column) => column.name),
-  ])), [schema]);
+  const completionSchema = useMemo(() => sqlCompletionSchema(schema, source.kind === 'postgres'), [schema, source.kind]);
+  const defaultSchema = source.kind === 'postgres' ? source.schema : undefined;
   const extensions = useMemo(() => [sql({
     dialect: source.kind === "postgres" ? PostgreSQL : SQLite,
-    schema: completionSchema,
-  })], [source.kind, completionSchema]);
+    schema: completionSchema, defaultSchema,
+  })], [source.kind, completionSchema, defaultSchema]);
 
   const run = async (all: boolean, forceWrite = false) => {
     if (busy || !ready) return;

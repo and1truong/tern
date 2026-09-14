@@ -10,7 +10,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "test:ui": "bun scripts/data-grid-smoke.ts && bun scripts/sql-editor-smoke.ts && bun scripts/connection-modal-smoke.ts && bun scripts/object-explorer-smoke.ts && bun scripts/migration-smoke.ts",
+    "test:ui": "bun scripts/data-grid-smoke.ts && bun scripts/sql-editor-smoke.ts && bun scripts/connection-modal-smoke.ts && bun scripts/object-explorer-smoke.ts && bun scripts/migration-smoke.ts && bun scripts/schema-selector-smoke.ts",
     "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build.ts",
     "start": "bun server.ts",
