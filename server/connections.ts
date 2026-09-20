@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import type { ConnectionProfile } from "../shared/types.ts";
 import { validateRedisUrl } from "../datasources/redis/connection.ts";
+import { validatePgUrl } from "../datasources/postgres/connection.ts";
 
 const SECRET_SERVICE = "dev.tern.credentials";
 
@@ -34,21 +35,10 @@ const systemSecrets: SecretStore = withLegacyCredentials({
   delete: async () => false,
 });
 
-export function validateConnectionUrl(url: string): void {
-  let parsed: URL;
-  try { parsed = new URL(url); } catch { throw new Error("Invalid PostgreSQL URL"); }
-  if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname) throw new Error('A PostgreSQL URL with a host is required');
-  const ssl = parsed.searchParams.get("sslmode");
-  if (ssl && !["disable", "prefer", "require", "verify-ca", "verify-full"].includes(ssl)) throw new Error("Invalid SSL mode");
-  for (const key of parsed.searchParams.keys()) {
-    if (!['sslmode', 'application_name', 'connect_timeout'].includes(key)) throw new Error(`Unsupported PostgreSQL URL option: ${key}`);
-  }
-}
-
 // Per-driver connection-url validation. Adding a backend means registering its
 // validator here (and its driver in server/app.ts's registry).
 const defaultValidators: Record<string, (url: string) => void> = {
-  postgres: validateConnectionUrl,
+  postgres: validatePgUrl,
   redis: validateRedisUrl,
 };
 

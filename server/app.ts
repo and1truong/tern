@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { makeConnections, type SecretStore } from "./connections.ts";
 import { makeHandlers } from "./routeHandlers.ts";
 import { recentFiles, sqlitePath } from "./appDatabase.ts";
-import { readSchema } from "./dbServer.ts";
+import { readSchema } from "../datasources/sqlite/engine.ts";
 import { createDriverRegistry } from "../datasources/registry.ts";
 import { makeDatasourceRouter } from "../datasources/router.ts";
 import { makeRedisDriver } from "../datasources/redis/driver.ts";

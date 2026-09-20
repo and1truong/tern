@@ -31,7 +31,7 @@ async function verify(name: string, url: string, expectFlavor: "redis" | "valkey
   const info = await driver.test({ url });
   check(`${name}: flavor is ${expectFlavor}`, info.flavor === expectFlavor, info.flavor);
   check(`${name}: version detected`, /^\d+\.\d+\.\d+$/.test(info.version), info.version);
-  check(`${name}: streams capability`, info.capabilities.streams === true);
+  check(`${name}: streams capability`, info.capabilities!.streams === true);
 
   const session = await driver.connect({ url });
   try {
@@ -98,7 +98,7 @@ async function verify(name: string, url: string, expectFlavor: "redis" | "valkey
     check(`${name}: indefinite BLPOP refused`, indefinite.reply.t === "err", indefinite.reply);
 
     // Lint flags KEYS.
-    const warnings = lintCommand("KEYS *", { writable: true, cluster: info.capabilities.cluster });
+    const warnings = lintCommand("KEYS *", { writable: true, cluster: info.capabilities!.cluster });
     check(`${name}: lint warns on KEYS`, warnings.some(w => w.rule === "keys-full-scan"), warnings);
   } finally {
     await session.close();

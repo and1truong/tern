@@ -2,7 +2,8 @@
 // browser bundle. No runtime-specific imports (Bun clients stay inside driver
 // implementations, e.g. datasources/redis/driver.ts).
 import type {
-  CommandResult, DataSourceInfo, KeyInspection, KeyOp, KeyOpResult, ScanPage,
+  CommandResult, DatabaseInsights, DataSourceInfo, DbSchema, ExecResult, KeyInspection,
+  KeyOp, KeyOpResult, MigrationResult, QueryResult, RowChange, RowMutationResult, ScanPage,
 } from "../shared/types.ts";
 import type { CommandDoc } from "./redis/catalog.ts";
 
@@ -33,10 +34,33 @@ export interface KeyValueExplorerProvider {
   keyOp(op: KeyOp): Promise<KeyOpResult>;
 }
 
+export interface RelationalQuery {
+  sql: string;
+  params?: unknown[];
+  limit?: number;
+  offset?: number;
+  timeoutMs?: number;
+  exportAll?: boolean;
+}
+
+// Relational engines (sqlite, postgres). Sessions hold resolved config, not a
+// live connection — engines open per call (pg) or per subprocess (sqlite).
+export interface RelationalProvider {
+  databases?(): Promise<string[]>;                     // postgres only
+  schema(): Promise<DbSchema>;
+  insights(signal?: AbortSignal): Promise<DatabaseInsights>;
+  query(q: RelationalQuery, signal?: AbortSignal): Promise<QueryResult>;
+  explain(q: RelationalQuery, signal?: AbortSignal): Promise<QueryResult>;
+  exec(sql: string, writable: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<ExecResult>;
+  migrate(sql: string, apply: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<MigrationResult>;
+  applyRows(changes: RowChange[], signal?: AbortSignal, timeoutMs?: number): Promise<RowMutationResult>;
+}
+
 export interface DriverSession {
   info: DataSourceInfo;
   console?: ConsoleProvider;
   explorer?: KeyValueExplorerProvider;
+  relational?: RelationalProvider;
   close(): Promise<void>;
 }
 

@@ -1,7 +1,10 @@
-import { sqliteTask } from "./sqliteTask.ts";
-import { validateConnectionUrl, type Connections } from "./connections.ts";
-import { createDatabase, readSchema } from "./dbServer.ts";
-import { explainPgQuery, readPgInsights, readPgSchema, runPgMigration, runPgQuery, runPgExec, runPgRowChanges, testPgConnection } from "./pgServer.ts";
+import { sqliteTask } from "../datasources/sqlite/task.ts";
+import { validatePgUrl } from "../datasources/postgres/connection.ts";
+import type { Connections } from "./connections.ts";
+import { createDatabase, readSchema } from "../datasources/sqlite/engine.ts";
+import { readPgSchema } from "../datasources/postgres/schema.ts";
+import { readPgInsights } from "../datasources/postgres/insights.ts";
+import { explainPgQuery, runPgMigration, runPgQuery, runPgExec, runPgRowChanges, testPgConnection } from "../datasources/postgres/run.ts";
 import { compileRowChanges } from "../shared/rowMutations.ts";
 import type { RowChange } from "../shared/types.ts";
 import { DbError } from "../shared/types.ts";
@@ -176,7 +179,7 @@ export function makeHandlers(conns: Connections, sessionWritable?: (id: string, 
       try {
         const url = b.connId ? await resolvePgUrl(b.connId, b.database) : (b.url ?? "").trim();
         if (!url) throw new DbError("not_found", "connection url is required");
-        validateConnectionUrl(url);
+        validatePgUrl(url);
         return Response.json(await testPgConnection(url, req.signal));
       } catch (e) { return dbErrorResponse(e); }
     },

@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sqliteTask } from "./sqliteTask.ts";
+import { sqliteTask } from "./task.ts";
 
 test('native SQLite query timeout and cancellation leave the server responsive', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tern-cancel-'));

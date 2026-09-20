@@ -59,7 +59,7 @@ export function RedisKeyExplorer({ source, info, activeKey, onOpenKey, onChanged
         </select>
         <button disabled={busy} onClick={() => { setApplied(a => a + 1); }} title="Refresh">↻</button>
       </div>
-      {info && <p className="text-[10px] text-[var(--faint)]">{info.flavor === 'valkey' ? 'Valkey' : info.flavor === 'redis' ? 'Redis' : info.flavor} {info.version}{info.capabilities.cluster ? ' · cluster' : ''}{info.summary.totalKeys !== undefined ? ` · ${info.summary.totalKeys} keys` : ''}</p>}
+      {info && <p className="text-[10px] text-[var(--faint)]">{info.flavor === 'valkey' ? 'Valkey' : info.flavor === 'redis' ? 'Redis' : info.flavor} {info.version}{info.capabilities?.cluster ? ' · cluster' : ''}{info.summary.totalKeys !== undefined ? ` · ${info.summary.totalKeys} keys` : ''}</p>}
     </div>
     {error && <div role="alert" className="error mx-2 mb-1 text-xs">{error}</div>}
     <div className="overflow-auto flex-1">

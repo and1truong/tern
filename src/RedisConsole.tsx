@@ -153,9 +153,9 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
   };
 
   const hint = argumentHint(consoleState.input);
-  const warnings = info ? lintCommand(consoleState.input, { writable, cluster: info.capabilities.cluster }) : [];
+  const warnings = info ? lintCommand(consoleState.input, { writable, cluster: info.capabilities?.cluster === true }) : [];
   const explanation: CommandExplanation | null = explainOpen && info
-    ? explainCommand(consoleState.input, info.capabilities)
+    ? explainCommand(consoleState.input, { cluster: info.capabilities?.cluster === true })
     : null;
   const flavorLabel = info ? (info.flavor === "valkey" ? "Valkey" : "Redis") : "Redis";
 

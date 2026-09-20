@@ -1,6 +1,6 @@
-import { DbError } from "../shared/types.ts";
-import type { QueryResult, ExecResult, MigrationResult, RowMutationResult, DatabaseInsights } from "../shared/types.ts";
-import { runQuery, explainQuery, runExec, runMigration, runRowChanges, readInsights } from "./dbServer.ts";
+import { DbError } from "../../shared/types.ts";
+import type { QueryResult, ExecResult, MigrationResult, RowMutationResult, DatabaseInsights } from "../../shared/types.ts";
+import { runQuery, explainQuery, runExec, runMigration, runRowChanges, readInsights } from "./engine.ts";
 
 type Task = { operation: 'query' | 'explain' | 'exec' | 'migration' | 'rows' | 'insights'; args: unknown[] };
 // SQLite is synchronous. A short-lived Bun subprocess makes cancellation interrupt
