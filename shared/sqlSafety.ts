@@ -25,6 +25,25 @@ const WRITE_TOKENS = new Set([
 // identifiers, and comments are deliberately excluded from the token stream.
 interface SqlToken { value: string; start: number; end: number }
 
+// Routine bodies still decode server-side: E'…' takes \xHH/\ooo/\uXXXX/
+// \UXXXXXXXX and U&'…' takes \XXXX/\+XXXXXX — a denylisted name must not
+// hide behind an escape. Invalid escapes are server-side errors anyway, so
+// undecodable input is fine left raw.
+function decodeRoutineBody(raw: string, prefix?: string): string {
+  const body = raw.replace(/''/g, "'");
+  try {
+    if (prefix === "E") {
+      return body.replace(/\\x[0-9a-fA-F]{1,2}|\\[0-7]{1,3}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}/g,
+        m => String.fromCodePoint(m[1] === "x" || m[1] === "u" || m[1] === "U" ? parseInt(m.slice(2), 16) : parseInt(m.slice(1), 8)));
+    }
+    if (prefix === "U") {
+      return body.replace(/\\\+[0-9a-fA-F]{6}|\\[0-9a-fA-F]{4}/g,
+        m => String.fromCodePoint(parseInt(m.slice(m[1] === "+" ? 2 : 1), 16)));
+    }
+  } catch { /* out-of-range code points are server-side errors anyway */ }
+  return body;
+}
+
 function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres", bodies?: string[]): SqlToken[] {
   const tokens: SqlToken[] = [];
   let i = 0;
@@ -65,10 +84,12 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres",
         // dollar-quoted — collect them for the migration function scan.
         // Gating on the preceding token keeps 'pg_sleep' data literals from
         // false-positiving (AS 'label' aliases are the contrived residue).
+        // E/N/U& are legal SCONST prefixes — DO U&'…' lexes U as a word.
         const last = tokens.at(-1)?.value;
         const prev = tokens.at(-2)?.value;
-        if (last === "DO" || last === "AS" || ((last === "E" || last === "N") && (prev === "DO" || prev === "AS"))) {
-          bodies.push(sql.slice(contentStart, contentEnd).replace(/''/g, "'"));
+        const prefix = (last === "E" || last === "N" || last === "U") && (prev === "DO" || prev === "AS") ? last : undefined;
+        if (last === "DO" || last === "AS" || prefix) {
+          bodies.push(decodeRoutineBody(sql.slice(contentStart, contentEnd), prefix));
         }
       }
       // "name"( — a double-quoted identifier immediately calling — is a real
@@ -149,7 +170,12 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres",
       const tag = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
       if (tag) {
         const end = sql.indexOf(tag, i + tag.length);
-        if (bodies && end !== -1) bodies.push(sql.slice(i + tag.length, end));
+        // Same DO/AS gate as the '…' path — a dollar-quoted data literal
+        // (INSERT ... VALUES ($$called pg_sleep at 3am$$)) is not a routine
+        // body and must not trip the migration function scan.
+        if (bodies && end !== -1 && ["DO", "AS"].includes(tokens.at(-1)?.value ?? "")) {
+          bodies.push(sql.slice(i + tag.length, end));
+        }
         i = end === -1 ? sql.length : end + tag.length;
         continue;
       }

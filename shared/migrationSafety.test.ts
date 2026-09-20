@@ -73,11 +73,19 @@ test('migration preview denies functions whose effects outlive the transaction',
     "DO 'BEGIN PERFORM pg_terminate_backend(pid) FROM pg_stat_activity; END' LANGUAGE plpgsql;",
     "CREATE FUNCTION f() RETURNS bigint AS 'SELECT pg_advisory_lock(1)' LANGUAGE sql;",
     'SELECT U&"pg_terminate_backend" UESCAPE /*c*/ \'!\' (pid) FROM pg_stat_activity;',
+    // U&'…' bodies are legal DO/AS SCONSTs — the U lexes as a word token —
+    // and E'…' bodies decode \xHH/\ooo escapes server-side.
+    "DO U&'PERFORM pg_terminate_backend(pg_backend_pid())';",
+    "DO E'PERFORM p\\x67_sleep(1)';",
+    "DO E'PERFORM pg\\137sleep(1)';",
+    "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS U&'SELECT pg_read_file($$pg_hba.conf$$)';",
   ]) {
     expect(() => validateMigrationSql(sql, 'postgres'), sql).toThrow();
   }
-  // A denylisted name inside an ordinary data literal is not a call.
+  // A denylisted name inside an ordinary data literal is not a call — and a
+  // dollar-quoted literal is data, not a routine body, away from DO/AS.
   expect(validateMigrationSql("CREATE TABLE t(x); INSERT INTO t VALUES ('pg_sleep');", 'postgres')).toContain('pg_sleep');
+  expect(validateMigrationSql("CREATE TABLE t(x); INSERT INTO t VALUES ($$called pg_sleep at 3am$$);", 'postgres')).toContain('pg_sleep');
   // Bodies that don't call denylisted functions stay allowed.
   expect(validateMigrationSql("DO $$ BEGIN RAISE NOTICE 'migrating'; END $$;", 'postgres')).toContain('RAISE');
   // Transaction-scoped advisory locks release at the preview ROLLBACK and
