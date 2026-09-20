@@ -61,6 +61,9 @@ export interface DriverSession {
   console?: ConsoleProvider;
   explorer?: KeyValueExplorerProvider;
   relational?: RelationalProvider;
+  // Sessions without a live transport (relational engines open connections
+  // per call) are never invalidated by provider errors.
+  stateless?: boolean;
   close(): Promise<void>;
 }
 

@@ -1,5 +1,4 @@
 import type { DbFile, DbSchema, QueryResult, ExecResult, ConnectionProfile, RowChange, RowChangeStatement, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult, DataSourceInfo, CommandResult, ScanPage, KeyInspection, KeyOp, KeyOpResult } from "../shared/types.ts";
-import type { CommandDoc } from "../datasources/redis/catalog.ts";
 
 const API = "/api";
 const session = crypto.randomUUID();
@@ -47,8 +46,10 @@ function saveState(key: string, value: unknown) {
   return stateWrite;
 }
 
+const DS = `${API}/datasource`;
+
 export const dbApi = {
-  databases: (src: DbSource) => fetch(`${API}/databases?${selectorQuery(src)}`).then(asJson<{ databases: string[] }>),
+  databases: (src: DbSource) => fetch(`${DS}/databases?${selectorQuery(src)}`).then(asJson<{ databases: string[] }>),
   access: (src: DbSource, writable: boolean) => post(`${API}/access`, { ...selector(src), writable }),
   forget: (path: string) => fetch(`${API}/recent?path=${encodeURIComponent(path)}`, { method: "DELETE" }).then(asJson),
   recent: () => fetch(`${API}/recent`).then(asJson<{ databases: DbFile[] }>),
@@ -68,46 +69,47 @@ export const dbApi = {
   },
   create: (path: string) => post<{ path: string; created: true }>(`${API}/create`, { path }),
   schema: (src: DbSource) =>
-    fetch(`${API}/schema?${selectorQuery(src)}`).then(asJson<DbSchema>),
-  insights: (src: DbSource) => fetch(`${API}/insights?${selectorQuery(src)}`).then(asJson<DatabaseInsights>),
+    fetch(`${DS}/schema?${selectorQuery(src)}`).then(asJson<DbSchema>),
+  insights: (src: DbSource) => fetch(`${DS}/insights?${selectorQuery(src)}`).then(asJson<DatabaseInsights>),
   query: (src: DbSource, sql: string, params: unknown[], limit: number, offset = 0, signal?: AbortSignal, timeoutMs = 30_000) =>
-    post<QueryResult>(`${API}/query`, { ...selector(src), sql, params, limit, offset, timeoutMs }, signal),
+    post<QueryResult>(`${DS}/query`, { ...selector(src), sql, params, limit, offset, timeoutMs }, signal),
   exportAll: (src: DbSource, sql: string, params: unknown[], signal?: AbortSignal) =>
-    post<QueryResult>(`${API}/query`, { ...selector(src), sql, params, exportAll: true }, signal),
+    post<QueryResult>(`${DS}/query`, { ...selector(src), sql, params, exportAll: true }, signal),
   explain: (src: DbSource, sql: string, params: unknown[] = [], signal?: AbortSignal, timeoutMs = 30_000) =>
-    post<QueryResult>(`${API}/explain`, { ...selector(src), sql, params, timeoutMs }, signal),
+    post<QueryResult>(`${DS}/explain`, { ...selector(src), sql, params, timeoutMs }, signal),
   migration: {
-    preview: (src: DbSource, sql: string) => post<MigrationResult>(`${API}/migration/preview`, { ...selector(src), sql }),
-    apply: (src: DbSource, sql: string) => post<MigrationResult>(`${API}/migration/apply`, { ...selector(src), sql, allowWrite: true }),
+    preview: (src: DbSource, sql: string) => post<MigrationResult>(`${DS}/migration/preview`, { ...selector(src), sql }),
+    apply: (src: DbSource, sql: string) => post<MigrationResult>(`${DS}/migration/apply`, { ...selector(src), sql, allowWrite: true }),
   },
   exec: (src: DbSource, sql: string, allowWrite: boolean, signal?: AbortSignal, timeoutMs = 30_000) =>
-    post<ExecResult>(`${API}/exec`, { ...selector(src), sql, allowWrite, timeoutMs }, signal),
+    post<ExecResult>(`${DS}/exec`, { ...selector(src), sql, allowWrite, timeoutMs }, signal),
   rows: {
     preview: (changes: RowChange[]) =>
-      post<{ statements: RowChangeStatement[] }>(`${API}/rows/preview`, { changes }),
+      post<{ statements: RowChangeStatement[] }>(`${DS}/rows/preview`, { changes }),
     apply: (src: DbSource, changes: RowChange[], signal?: AbortSignal) =>
-      post<RowMutationResult>(`${API}/rows/apply`, { ...selector(src), changes, allowWrite: true }, signal),
+      post<RowMutationResult>(`${DS}/rows/apply`, { ...selector(src), changes, allowWrite: true }, signal),
   },
   connections: {
     list: () => fetch(`${API}/connections`).then(asJson<{ connections: ConnectionProfile[] }>),
     save: (driver: string, label: string, url: string, environment: ConnectionProfile["environment"], readOnly: boolean) =>
       post<ConnectionProfile>(`${API}/connections`, { driver, label, url, environment, readOnly }),
-    test: (url: string, signal?: AbortSignal) => post<ConnectionTestResult>(`${API}/connections/test`, { url }, signal),
+    test: async (url: string, signal?: AbortSignal): Promise<ConnectionTestResult> => {
+      const info = await post<DataSourceInfo>(`${DS}/test`, { driver: "postgres", url }, signal);
+      return { serverVersion: info.version, database: String(info.summary.database ?? ""), user: String(info.summary.user ?? ""), ms: Number(info.summary["ping ms"] ?? 0) };
+    },
     delete: (id: string) =>
       fetch(`${API}/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" }).then(asJson<{ ok: boolean }>),
   },
   // Key-value datasources (capability-provided; only drivers with console/explorer
   // providers answer these).
   datasource: {
-    test: (driver: string, url: string) => post<DataSourceInfo>(`${API}/datasource/test`, { driver, url }),
-    session: (src: RedisSource) => post<{ info: DataSourceInfo }>(`${API}/datasource/session`, selector(src)),
-    exec: (src: RedisSource, command: string) => post<CommandResult>(`${API}/datasource/exec`, { ...selector(src), command }),
+    test: (driver: string, url: string, signal?: AbortSignal) => post<DataSourceInfo>(`${DS}/test`, { driver, url }, signal),
+    session: (src: RedisSource) => post<{ info: DataSourceInfo }>(`${DS}/session`, selector(src)),
+    exec: (src: RedisSource, command: string, signal?: AbortSignal) => post<CommandResult>(`${DS}/command`, { ...selector(src), command }, signal),
     scan: (src: RedisSource, q: { cursor: string; match?: string; count?: number; type?: string }) =>
-      post<ScanPage>(`${API}/datasource/scan`, { ...selector(src), ...q }),
+      post<ScanPage>(`${DS}/scan`, { ...selector(src), ...q }),
     inspect: (src: RedisSource, key: string, cursor?: string) =>
-      post<KeyInspection>(`${API}/datasource/key`, { ...selector(src), key, ...(cursor !== undefined ? { cursor } : {}) }),
-    keyOp: (src: RedisSource, op: KeyOp) => post<KeyOpResult>(`${API}/datasource/key/op`, { ...selector(src), op }),
-    catalog: (src: RedisSource) =>
-      fetch(`${API}/datasource/catalog?${selectorQuery(src)}`).then(asJson<{ commands: CommandDoc[] }>),
+      post<KeyInspection>(`${DS}/key`, { ...selector(src), key, ...(cursor !== undefined ? { cursor } : {}) }),
+    keyOp: (src: RedisSource, op: KeyOp) => post<KeyOpResult>(`${DS}/key/op`, { ...selector(src), op }),
   },
 };

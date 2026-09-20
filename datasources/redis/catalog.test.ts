@@ -5,7 +5,7 @@ describe("command catalog integrity", () => {
   const names = commandCatalog.map(d => d.name);
   test("names are unique and uppercase", () => {
     expect(new Set(names).size).toBe(names.length);
-    names.forEach(n => expect(n).toMatch(/^[A-Z][A-Z0-9.-]*$/));
+    names.forEach(n => expect(n).toMatch(/^[A-Z][A-Z0-9._-]*$/));
   });
   test("every doc has required fields with sane values", () => {
     for (const d of commandCatalog) {

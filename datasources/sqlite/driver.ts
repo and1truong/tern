@@ -33,6 +33,7 @@ export function makeSqliteDriver(): DataSourceDriver {
       return {
         info: { version: probed.pragmas.sqlite_version ?? "", summary: { engine: "SQLite", tables: probed.tables.length } },
         relational,
+        stateless: true,
         async close() {},
       };
     },

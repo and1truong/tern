@@ -45,6 +45,7 @@ export function makePostgresDriver(): DataSourceDriver {
       return {
         info: { version: probed.serverVersion, summary: { database: probed.database, user: probed.user } },
         relational,
+        stateless: true,
         async close() {},
       };
     },

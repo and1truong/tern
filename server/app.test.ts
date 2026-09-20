@@ -32,23 +32,23 @@ test("standalone API persists state and recent files, denies implicit access/wri
   let app = makeApp(db);
   const post = (route: string, body: unknown, headers = {}) => app(new Request(`http://localhost/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }));
   try {
-    expect((await post('query', { path, sql: 'SELECT * FROM users' })).status).toBe(403);
+    expect((await post('datasource/query', { path, sql: 'SELECT * FROM users' })).status).toBe(403);
     expect((await post('open', { path }, { origin: 'https://evil.example' })).status).toBe(403);
     expect((await post('open', { path })).status).toBe(200);
-    expect((await post('query', { path, sql: 'DELETE FROM users' })).status).toBe(400);
-    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
+    expect((await post('datasource/query', { path, sql: 'DELETE FROM users' })).status).toBe(400);
+    expect((await post('datasource/exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
     expect((await post('access', { path, writable: true })).status).toBe(200);
-    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true }, { 'x-tern-session': 'new-window' })).status).toBe(403);
+    expect((await post('datasource/exec', { path, sql: 'DELETE FROM users', allowWrite: true }, { 'x-tern-session': 'new-window' })).status).toBe(403);
     const migration = { path, sql: 'CREATE TABLE audit(id INTEGER)', allowWrite: true };
-    expect((await post('migration/apply', migration)).status).toBe(400);
-    expect((await post('migration/preview', migration)).status).toBe(200);
+    expect((await post('datasource/migration/apply', migration)).status).toBe(400);
+    expect((await post('datasource/migration/preview', migration)).status).toBe(200);
     const check = new Database(path, { readonly: true });
     expect(check.query("SELECT name FROM sqlite_master WHERE name='audit'").get()).toBeNull(); check.close();
-    expect((await post('migration/apply', { ...migration, sql: 'CREATE TABLE other(id)' })).status).toBe(400);
-    expect((await post('migration/apply', migration)).status).toBe(200);
+    expect((await post('datasource/migration/apply', { ...migration, sql: 'CREATE TABLE other(id)' })).status).toBe(400);
+    expect((await post('datasource/migration/apply', migration)).status).toBe(200);
     const changes = [{ kind: 'update', table: { name: 'users' }, key: { id: 1 }, expected: { name: 'Ada' }, values: { name: 'Grace' } }];
-    expect((await post('rows/apply', { path, changes, allowWrite: true })).status).toBe(200);
-    expect((await post('rows/apply', { path, changes, allowWrite: true })).status).toBe(409);
+    expect((await post('datasource/rows/apply', { path, changes, allowWrite: true })).status).toBe(200);
+    expect((await post('datasource/rows/apply', { path, changes, allowWrite: true })).status).toBe(409);
     await post('state', { key: 'sql:test', value: { sql: 'SELECT 42', history: ['SELECT 1'] } });
     db.close(); db = openAppDatabase(join(dir, 'app.sqlite')); app = makeApp(db);
     const saved = await app(new Request('http://localhost/api/state?key=sql:test'));
@@ -59,10 +59,10 @@ test("standalone API persists state and recent files, denies implicit access/wri
     const recent = await app(new Request('http://localhost/api/recent'));
     expect((await recent.json()).databases[0].path).toBe(path);
     await post('open', { path });
-    expect((await post('exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
-    expect((await post('exec', { path, sql: 'BEGIN; SELECT * FROM users; COMMIT' })).status).toBe(200);
-    expect((await post('exec', { path, sql: 'BEGIN; DELETE FROM users; COMMIT' })).status).toBe(400);
-    expect((await post('exec', { path, sql: 'SELECT COUNT(*) AS n FROM users' })).status).toBe(200);
+    expect((await post('datasource/exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
+    expect((await post('datasource/exec', { path, sql: 'BEGIN; SELECT * FROM users; COMMIT' })).status).toBe(200);
+    expect((await post('datasource/exec', { path, sql: 'BEGIN; DELETE FROM users; COMMIT' })).status).toBe(400);
+    expect((await post('datasource/exec', { path, sql: 'SELECT COUNT(*) AS n FROM users' })).status).toBe(200);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -87,12 +87,12 @@ test("datasource routes resolve profiles through registered drivers and gate wri
     expect(session.status).toBe(200);
     expect((await session.json()).info.flavor).toBe('redis');
 
-    const read = await post('datasource/exec', { connId: profile.id, command: 'GET k' });
+    const read = await post('datasource/command', { connId: profile.id, command: 'GET k' });
     expect(read.status).toBe(200);
     expect((await read.json()).reply).toEqual({ t: 'str', s: 'v1' });
-    expect((await post('datasource/exec', { connId: profile.id, command: 'SET k v' })).status).toBe(400);
+    expect((await post('datasource/command', { connId: profile.id, command: 'SET k v' })).status).toBe(400);
     expect((await post('access', { connId: profile.id, writable: true })).status).toBe(200);
-    expect((await post('datasource/exec', { connId: profile.id, command: 'SET k v' })).status).toBe(200);
+    expect((await post('datasource/command', { connId: profile.id, command: 'SET k v' })).status).toBe(200);
     expect(calls.some(c => c.command === 'SET')).toBe(true);
 
     expect((await post('state', { key: 'redis:doc-1', value: { input: 'PING', history: [] } })).status).toBe(200);
