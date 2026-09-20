@@ -146,6 +146,18 @@ describe("datasource router", () => {
     expect(stringCount.status).toBe(400);
   });
 
+  test("/key and /key/op accept the empty-string key (legal in Redis)", async () => {
+    const { driver } = fakeDriver();
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    // SCAN returns "" as a key name — inspect and ops must reach it too.
+    const inspect = await router.route(makeRequest("/key", { connId: "p1", key: "" }));
+    expect(inspect.status).toBe(200);
+    const op = await router.route(makeRequest("/key/op", { connId: "p1", op: { op: "delete", keys: [""] } }));
+    expect(op.status).toBe(200);
+  });
+
   test("/key/op allows empty field/member strings (legal in Redis)", async () => {
     const { driver } = fakeDriver();
     const registry = createDriverRegistry();

@@ -212,6 +212,48 @@ describe("explorer inspect", () => {
     expect(calls.some(c => c.command === "GET" || c.command === "GETRANGE")).toBe(false);
   });
 
+  test("binary (Uint8Array) numeric replies still parse", async () => {
+    const bytes = (s: string) => new TextEncoder().encode(s);
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return bytes("string");
+      if (command === "TTL") return bytes("3600");
+      if (command === "STRLEN") return 3;
+      if (command === "GETRANGE") return "abc";
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("k");
+    expect(inspection.ttlSeconds).toBe(3600);
+  });
+
+  test("a capped string read with STRLEN denied reports unknown length", async () => {
+    const big = "x".repeat(1_000_000);
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "string";
+      if (command === "STRLEN") return null; // ACL denied
+      if (command === "GETRANGE") return big;
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("k");
+    expect(inspection.value).toMatchObject({ kind: "string", truncated: true, lengthBytes: null });
+  });
+
+  test("the string preview budget is bytes, not chars", async () => {
+    const value = "💾".repeat(20_000); // 80KB of 4-byte chars
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "string";
+      if (command === "STRLEN") return 80_000;
+      if (command === "GETRANGE") return value;
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("k");
+    const v = inspection.value as { kind: "string"; value: string; truncated: boolean };
+    expect(v.truncated).toBe(true);
+    expect(new TextEncoder().encode(v.value).length).toBeLessThanOrEqual(64_000);
+  });
+
   test("string reads stay bounded even when STRLEN answered", async () => {
     // STRLEN and the value read are separate round trips — a concurrent SET
     // could grow the value between them, so the read is always GETRANGE.

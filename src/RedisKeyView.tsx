@@ -128,7 +128,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
       {v.kind === 'string' && <div className="space-y-2">
         <textarea readOnly={!writable || v.truncated} value={stringDraft ?? v.value} onChange={e => setStringDraft(e.target.value)}
           rows={6} className="w-full bg-[var(--bg)] border border-[var(--border)] p-2 font-mono text-xs" />
-        <p className="text-xs text-[var(--faint)]">{v.lengthBytes} bytes{v.truncated ? ' · preview truncated — editing disabled; edit via GET/SET in the console' : ''}{!v.truncated && writable && stringDraft === null ? ' · click into the text to edit' : ''}</p>
+        <p className="text-xs text-[var(--faint)]">{v.lengthBytes ?? 'unknown'} bytes{v.truncated ? ' · preview truncated — editing disabled; edit via GET/SET in the console' : ''}{!v.truncated && writable && stringDraft === null ? ' · click into the text to edit' : ''}</p>
         {writable && !v.truncated && stringDraft !== null && <div className="flex gap-1">
           <button className="primary text-xs" disabled={isBusy} onClick={() => void mutate({ op: 'setString', key: keyName, value: stringDraft })}>Save value</button>
           <button className="text-xs" onClick={() => setStringDraft(null)}>Revert</button>

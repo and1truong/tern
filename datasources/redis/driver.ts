@@ -287,7 +287,9 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo,
       const raw = await send(command, args);
       // A nil reply means "unknown" — Number(null) would silently become 0.
       if (raw === null || raw === undefined) return null;
-      const n = typeof raw === "number" ? raw : Number(raw);
+      // Binary transports answer as Uint8Array — decode before parsing or
+      // every probe degrades to null ("unknown").
+      const n = typeof raw === "number" ? raw : Number(text(raw));
       return Number.isFinite(n) ? n : null;
     } catch (error) {
       if (error instanceof DbError && error.code === "command_error") return null;
@@ -335,7 +337,7 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo,
       try {
         const raw = await send(command, args);
         if (raw === null || raw === undefined) return { ok: true };
-        const n = typeof raw === "number" ? raw : Number(raw);
+        const n = typeof raw === "number" ? raw : Number(text(raw));
         return { ok: true, ...(Number.isFinite(n) ? { n } : {}) };
       } catch (error) {
         // Only server-side command rejections become result errors; transport
@@ -363,12 +365,19 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo,
         const value = raw === null || raw === undefined ? "" : text(raw);
         // GETRANGE caps bytes, not decoded chars — multibyte values need the
         // encoded length for both the truncation signal and the byte count.
-        const valueBytes = new TextEncoder().encode(value).length;
+        const encoded = new TextEncoder().encode(value);
+        const valueBytes = encoded.length;
+        // The preview budget is bytes too — a 4-byte-char value would
+        // otherwise ship ~4x the preview. Decoding the slice can end
+        // mid-codepoint; drop a trailing replacement char.
+        const preview = new TextDecoder("utf-8").decode(encoded.subarray(0, STRING_PREVIEW_BYTES)).replace(/\uFFFD$/, "");
         return {
           kind: "string",
-          value: value.slice(0, STRING_PREVIEW_BYTES),
-          truncated: value.length > STRING_PREVIEW_BYTES || valueBytes >= STRING_MAX_BYTES,
-          lengthBytes: length ?? valueBytes,
+          value: preview,
+          truncated: valueBytes > STRING_PREVIEW_BYTES || valueBytes >= STRING_MAX_BYTES,
+          // STRLEN denied + the capped read full → the true length is
+          // unknown; reporting the cap as the length would lie.
+          lengthBytes: length ?? (valueBytes >= STRING_MAX_BYTES ? null : valueBytes),
         };
       }
       case "hash": {

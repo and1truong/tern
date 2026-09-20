@@ -242,7 +242,7 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
             });
           }
           case "/key": {
-            const key = str(body.key, "key", 1, 64 * 1024);
+            const key = str(body.key, "key", 0, 64 * 1024);
             const cursor = body.cursor === undefined || body.cursor === "" ? undefined : str(body.cursor, "cursor", 1, 128);
             return await withSession(body, async (session) => {
               if (!session.explorer) throw new DbError("not_found", "This source has no key explorer");
@@ -284,12 +284,11 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
 // (e.g. `members: "admin"` char-splitting into SREM arguments) must fail here,
 // never mutate members the caller never named.
 function validateKeyOp(op: Record<string, unknown>): void {
-  // Redis keys, fields and members can far exceed a short buffer — RESP bulk
-  // strings carry them, so the cap is only a sanity bound.
-  const key = (v: unknown): v is string => typeof v === "string" && v.length >= 1 && v.length <= 64 * 1024;
+  // Redis keys, fields and members can far exceed a short buffer — RESP
+  // bulk strings carry them, so the cap is only a sanity bound. SET "" v is
+  // legal too — empty names round-trip fine.
+  const key = (v: unknown): v is string => typeof v === "string" && v.length <= 64 * 1024;
   const keys = (v: unknown): v is string[] => Array.isArray(v) && v.length >= 1 && v.length <= 100 && v.every(key);
-  // Fields and members may legally be "" in Redis — unlike key names they
-  // round-trip empty, so only the size bound applies.
   const items = (v: unknown): v is string[] => Array.isArray(v) && v.length >= 1 && v.length <= 100 && v.every(i => typeof i === "string" && i.length <= 64 * 1024);
   // Values are capped too — a multi-hundred-MB body has no business flowing
   // into a workbench key edit.

@@ -46,6 +46,14 @@ describe("parseInfoSections", () => {
     const { sections } = parseInfoSections({ redis_version: "7.0.0" });
     expect(sections.redis_version).toBe("7.0.0");
   });
+  test("tolerates Map and byte replies, and refuses non-INFO shapes", () => {
+    expect(parseInfoSections(new Map([["redis_version", "7.2.4"]])).sections.redis_version).toBe("7.2.4");
+    expect(parseInfoSections(new TextEncoder().encode("redis_version:7.2.4")).sections.redis_version).toBe("7.2.4");
+    // A bare number or stray array is no INFO payload — degrade to empty
+    // (unknown flavor, all capabilities off) rather than throwing.
+    expect(detectDataSourceInfo(42).flavor).toBe("unknown");
+    expect(detectDataSourceInfo(["a", "b"]).capabilities!.streams).toBe(false);
+  });
 });
 
 describe("detectDataSourceInfo", () => {

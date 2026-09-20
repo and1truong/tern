@@ -139,13 +139,18 @@ export function lintCommand(input: string, opts: { writable: boolean; cluster: b
 
 function isUnboundedRead(name: string, args: string[]): boolean {
   const intValue = (s?: string) => (s !== undefined && /^-?\d+$/.test(s) ? Number(s) : NaN);
-  // A trailing LIMIT/COUNT bounds the reply only when it's a real bound:
-  // LIMIT 0 means "unlimited" (*INTERCARD), a negative LIMIT count returns
-  // everything from the offset (ZRANGE family), and a non-positive COUNT is
-  // a server error — none of those suppress the whole-collection warning.
-  const boundedTail = (a: string[]) => {
-    if (/^(?:COUNT|LIMIT)$/i.test(a.at(-2) ?? "")) return intValue(a.at(-1)) > 0;
-    if (/^LIMIT$/i.test(a.at(-3) ?? "")) return intValue(a.at(-1)) >= 0;
+  // A LIMIT/COUNT bounds the reply only when it's a real bound: COUNT and
+  // single-arg LIMIT (*INTERCARD) need a positive count; two-arg LIMIT
+  // (SORT, ZRANGE family) bounds on count >= 0 — 0 is an empty (bounded)
+  // reply, negative means unlimited. Keywords may sit mid-command
+  // (SORT k BY p LIMIT 0 10 GET x), so scan every position; an argument
+  // literally named LIMIT/COUNT just fails the numeric check.
+  const boundedTail = (a: string[], twoArgLimit: boolean) => {
+    for (let i = 0; i < a.length; i++) {
+      const t = a[i]!.toUpperCase();
+      if (t === "COUNT" && intValue(a[i + 1]) > 0) return true;
+      if (t === "LIMIT" && intValue(a[twoArgLimit ? i + 2 : i + 1]) >= (twoArgLimit ? 0 : 1)) return true;
+    }
     return false;
   };
   const fullIndex = (a?: string, b?: string) => (a === "0" || a === "-0") && b === "-1";
@@ -158,13 +163,13 @@ function isUnboundedRead(name: string, args: string[]): boolean {
   // variants do the same read plus a write.
   if (["SMEMBERS", "HGETALL", "HKEYS", "HVALS", "SINTER", "SUNION", "SDIFF", "ZINTER", "ZUNION", "ZDIFF", "SINTERSTORE", "SUNIONSTORE", "SDIFFSTORE", "ZINTERSTORE", "ZUNIONSTORE"].includes(name)) return true;
   // *INTERCARD's LIMIT option caps the cardinality read.
-  if (name === "SINTERCARD" || name === "ZINTERCARD") return !boundedTail(args);
+  if (name === "SINTERCARD" || name === "ZINTERCARD") return !boundedTail(args, false);
   // SORT reads the whole collection (BY/GET multiply that per element);
-  // a LIMIT tail caps it.
-  if (name === "SORT" || name === "SORT_RO") return !boundedTail(args);
+  // a LIMIT clause caps it.
+  if (name === "SORT" || name === "SORT_RO") return !boundedTail(args, true);
   // XINFO STREAM k FULL returns every entry — an XRANGE - + in disguise —
-  // unless a COUNT tail caps it.
-  if (name === "XINFO") return /^STREAM$/i.test(args[0] ?? "") && /^FULL$/i.test(args[2] ?? "") && !boundedTail(args);
+  // unless a COUNT caps it.
+  if (name === "XINFO") return /^STREAM$/i.test(args[0] ?? "") && /^FULL$/i.test(args[2] ?? "") && !boundedTail(args, false);
   // LCS compares both strings end-to-end; LEN bounds the reply to a count.
   if (name === "LCS") return !args.slice(2).some(a => /^LEN$/i.test(a));
   // XREAD STREAMS k 0 replays the entire stream — an XRANGE k - + in
@@ -186,20 +191,20 @@ function isUnboundedRead(name: string, args: string[]): boolean {
   if (name === "LRANGE" || name === "GETRANGE" || name === "SUBSTR") return fullIndex(args[1], args[2]);
   if (name === "ZREVRANGE") return fullIndex(args[1], args[2]);
   // Full stream ranges ("-" to "+" — XREVRANGE takes the bounds reversed);
-  // a trailing COUNT/LIMIT caps the reply.
-  if (name === "XRANGE") return fullLex(args[1], args[2]) && !boundedTail(args);
-  if (name === "XREVRANGE") return fullLex(args[2], args[1]) && !boundedTail(args);
-  if (name === "ZRANGEBYSCORE") return fullScore(args[1], args[2]) && !boundedTail(args);
+  // a COUNT caps the reply.
+  if (name === "XRANGE") return fullLex(args[1], args[2]) && !boundedTail(args, false);
+  if (name === "XREVRANGE") return fullLex(args[2], args[1]) && !boundedTail(args, false);
+  if (name === "ZRANGEBYSCORE") return fullScore(args[1], args[2]) && !boundedTail(args, true);
   // REV variants take the range bounds in reverse order (max then min).
-  if (name === "ZREVRANGEBYSCORE") return fullScore(args[2], args[1]) && !boundedTail(args);
-  if (name === "ZRANGEBYLEX") return fullLex(args[1], args[2]) && !boundedTail(args);
-  if (name === "ZREVRANGEBYLEX") return fullLex(args[2], args[1]) && !boundedTail(args);
+  if (name === "ZREVRANGEBYSCORE") return fullScore(args[2], args[1]) && !boundedTail(args, true);
+  if (name === "ZRANGEBYLEX") return fullLex(args[1], args[2]) && !boundedTail(args, true);
+  if (name === "ZREVRANGEBYLEX") return fullLex(args[2], args[1]) && !boundedTail(args, true);
   if (name === "ZRANGE") {
     const modifier = args.slice(3).find(a => a.toUpperCase() === "BYSCORE" || a.toUpperCase() === "BYLEX")?.toUpperCase();
     // With REV the bound order flips: the full score range is "+inf -inf".
     const rev = args.slice(3).some(a => a.toUpperCase() === "REV");
-    if (modifier === "BYSCORE") return (rev ? fullScore(args[2], args[1]) : fullScore(args[1], args[2])) && !boundedTail(args);
-    if (modifier === "BYLEX") return (rev ? fullLex(args[2], args[1]) : fullLex(args[1], args[2])) && !boundedTail(args);
+    if (modifier === "BYSCORE") return (rev ? fullScore(args[2], args[1]) : fullScore(args[1], args[2])) && !boundedTail(args, true);
+    if (modifier === "BYLEX") return (rev ? fullLex(args[2], args[1]) : fullLex(args[1], args[2])) && !boundedTail(args, true);
     return fullIndex(args[1], args[2]);
   }
   return false;

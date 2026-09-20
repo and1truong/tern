@@ -13,16 +13,21 @@ export function versionAtLeast(version: string, maj: number, min = 0): boolean {
 };
 const since = (version: string, maj: number, min = 0) => versionAtLeast(version, maj, min);
 
-export function parseInfoSections(raw: string | Record<string, unknown>): {
+export function parseInfoSections(raw: unknown): {
   sections: Record<string, string>; modules: string[];
 } {
   const sections: Record<string, string> = {};
   const modules: string[] = [];
+  // Transports may decode INFO's bulk reply into a Map or carry it as
+  // bytes; anything else (a bare number, a stray array) is no INFO payload.
+  if (raw instanceof Map) raw = Object.fromEntries(raw);
+  if (raw instanceof Uint8Array) raw = new TextDecoder("utf-8").decode(raw);
   if (raw === null || raw === undefined) return { sections, modules };
-  if (typeof raw === "object") {
+  if (typeof raw === "object" && !Array.isArray(raw)) {
     for (const [k, v] of Object.entries(raw)) sections[k] = String(v);
     return { sections, modules };
   }
+  if (typeof raw !== "string") return { sections, modules };
   for (const line of raw.split(/\r?\n/)) {
     if (!line || line.startsWith("#")) continue;
     if (line.startsWith("module:")) {
@@ -36,7 +41,7 @@ export function parseInfoSections(raw: string | Record<string, unknown>): {
   return { sections, modules };
 }
 
-export function detectDataSourceInfo(raw: string | Record<string, unknown>): DataSourceInfo {
+export function detectDataSourceInfo(raw: unknown): DataSourceInfo {
   const { sections, modules } = parseInfoSections(raw);
   const flavor: RedisFlavor = sections.valkey_version ? "valkey" : sections.redis_version ? "redis" : "unknown";
   const version = sections.valkey_version ?? sections.redis_version ?? "";

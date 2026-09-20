@@ -42,6 +42,15 @@ describe("lintCommand", () => {
     expect(rules("ZRANGEBYSCORE k (-inf (+inf")).toContain("unbounded-read");
     expect(rules("ZRANGE k -INF +INF BYSCORE")).toContain("unbounded-read");
   });
+  test("a LIMIT/COUNT bound counts anywhere in the option tail", () => {
+    const unbounded = (command: string) => lintCommand(command, noCluster).some(w => w.rule === "unbounded-read");
+    // SORT's LIMIT takes offset+count and can sit before GET clauses.
+    expect(unbounded("SORT k BY p LIMIT 0 10 GET x")).toBe(false);
+    expect(unbounded("XRANGE s - + COUNT 5")).toBe(false);
+    // But the bound must be real: negative LIMIT count means unlimited.
+    expect(unbounded("SORT k LIMIT 0 -1")).toBe(true);
+    expect(unbounded("SINTERCARD 2 a b LIMIT 0")).toBe(true);
+  });
   test("unbounded collection reads are flagged", () => {
     for (const command of ["SMEMBERS bigset", "HGETALL bighash", "HKEYS bighash", "HVALS bighash", "LRANGE list 0 -1", "ZRANGE z 0 -1 WITHSCORES"]) {
       const warning = lintCommand(command, noCluster).find(w => w.rule === "unbounded-read");

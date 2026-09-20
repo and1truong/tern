@@ -107,6 +107,12 @@ test("datasource routes resolve profiles through registered drivers and gate wri
     expect((await post('datasource/command', { connId: profile.id, command: 'SET k v' })).status).toBe(200);
     expect(calls.some(c => c.command === 'SET')).toBe(true);
 
+    // Db-index aliases canonicalize server-side: a grant on "0" covers "00"
+    // and both share one session, while "" still means "the URL's db".
+    await post('access', { connId: profile.id, database: '0', writable: true });
+    const aliased = await post('datasource/command', { connId: profile.id, database: '00', command: 'SET k v2' });
+    expect(aliased.status).toBe(200);
+
     expect((await post('state', { key: 'redis:doc-1', value: { input: 'PING', history: [] } })).status).toBe(200);
 
     // Deleting the profile closes its cached driver sessions.

@@ -159,7 +159,7 @@ export interface ScanPage {
 }
 
 export type KeyValueView =
-  | { kind: "string"; value: string; truncated: boolean; lengthBytes: number }
+  | { kind: "string"; value: string; truncated: boolean; lengthBytes: number | null }
   | { kind: "hash"; entries: { field: string; value: string }[]; cursor: string; truncated: boolean }
   | { kind: "list"; items: string[]; start: number; truncated: boolean }
   | { kind: "set"; members: string[]; cursor: string; truncated: boolean }
