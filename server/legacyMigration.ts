@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, linkSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { SecretStore } from "./connections.ts";
@@ -31,12 +31,14 @@ export function migrateAppDatabase(source: string, destination: string): void {
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EXDEV") {
-        // Cross-device destination: copy then rename inside the target
-        // filesystem to keep the publish atomic.
+        // Cross-device destination: copy then hard-link inside the target
+        // filesystem — linkSync refuses an existing destination where
+        // renameSync would silently replace it.
         const staged = `${destination}.${crypto.randomUUID()}.staging`;
         try {
           copyFileSync(temporary, staged);
-          renameSync(staged, destination);
+          try { linkSync(staged, destination); }
+          catch (linkError) { if ((linkError as NodeJS.ErrnoException).code !== "EEXIST") throw linkError; }
         } finally {
           if (existsSync(staged)) unlinkSync(staged);
         }

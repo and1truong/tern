@@ -295,10 +295,14 @@ export function runExec(pathRaw: string, sql: string, readOnly = false): ExecRes
         for (const text of statements) {
           const statement = db.prepare(text);
           const labels = statement.columnNames;
-          const rows = labels.length ? statement.values() as unknown[][] : (statement.run(), []);
+          // Cap what we materialize into the wire result — a multi-statement
+          // script's SELECTs never saw the query path's LIMIT injection.
+          const all = labels.length ? statement.values() as unknown[][] : (statement.run(), []);
+          const truncated = all.length > HARD_LIMIT;
+          const rows = truncated ? all.slice(0, HARD_LIMIT) : all;
           const width = rows[0]?.length ?? labels.length;
           const columns = width === labels.length && new Set(labels).size === labels.length ? labels : Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
-          if (columns.length || returning) result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: false };
+          if (columns.length || returning) result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, offset: 0, hasMore: truncated };
         }
       } else db.exec(sql);
       rowsAffected = multiple ? null : Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);

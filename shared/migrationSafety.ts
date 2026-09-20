@@ -24,7 +24,12 @@ export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres"
     // scan skips — PERFORM pg_terminate_backend inside one must still be
     // denied. (Nested dollar quotes and EXECUTE'd dynamic strings stay
     // opaque; closing that needs a real parser.)
-    const fn = deny(tokens) ?? bodies.map(body => deny(sqlTokens(body, dialect))).find(Boolean);
+    // The joined scan covers Postgres's SCONST concatenation: adjacent
+    // '…' literals separated by a newline fold server-side, so a denylisted
+    // name can be split across collected fragments ('pg_termin' 'ate_backend').
+    const fn = deny(tokens)
+      ?? bodies.map(body => deny(sqlTokens(body, dialect))).find(Boolean)
+      ?? deny(sqlTokens(bodies.join(""), dialect));
     if (fn) throw new DbError('sql', `Migration scripts cannot call ${fn.toLowerCase()} — its effects outlive the preview transaction`);
   }
   let first = true;

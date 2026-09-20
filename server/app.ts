@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import { makeConnections, type SecretStore } from "./connections.ts";
 import { makeHandlers } from "./routeHandlers.ts";
@@ -36,7 +37,10 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
   const connections = makeConnections(db, options.secrets, Object.fromEntries(registry.list().filter(d => d.id !== "sqlite").map(d => [d.id, d.validateUrl])));
   const writable = new Set<string>();
   const opened = new Set<string>();
-  const validated = new Map<string, unknown>();
+  // Hashes, not scripts — a 1 MB script per never-applied preview would grow
+  // the map unboundedly; the digest preserves exact-match semantics.
+  const validated = new Map<string, string>();
+  const scriptHash = (sql: string) => createHash("sha256").update(sql).digest("hex");
   const datasource = makeDatasourceRouter(connections, registry);
 
   const fail = (error: string, status = 400) => Response.json({ error }, { status });
@@ -166,14 +170,14 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
           validated.delete(accessKey);
         } else if (sub === "/migration/apply") {
           if (!writable.has(accessKey)) return fail("Connection is read-only", 403);
-          if (validated.get(accessKey) !== body.sql) return fail("Run a successful dry run of this exact script before applying");
+          if (typeof body.sql !== "string" || validated.get(accessKey) !== scriptHash(body.sql)) return fail("Run a successful dry run of this exact script before applying");
           validated.delete(accessKey);
         }
         const result = await datasource.route({
           path: sub, body, url, signal: req.signal,
           writable: connKey => writable.has(`${session}:${connKey}`),
         });
-        if (sub === "/migration/preview" && result.ok) validated.set(accessKey, body.sql);
+        if (sub === "/migration/preview" && result.ok && typeof body.sql === "string") validated.set(accessKey, scriptHash(body.sql));
         return result;
       }
       return fail("Not found", 404);

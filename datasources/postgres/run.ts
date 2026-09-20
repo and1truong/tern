@@ -141,10 +141,15 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
     try {
       const rows = await controlledPg(url, connection, () => connection.unsafe(sql).values(), signal, timeoutMs) as unknown[][];
       rowsAffected = affectedOf(rows);
-      if (rows.length > 0 || sqlTokens(sql)[0] === "EXPLAIN") {
+      // Bun SQL exposes no row cursor — statement_timeout bounds duration and
+      // this cap bounds what we encode and serialize (the driver buffer is
+      // transient). Same convention as runPgQuery: fetch cap + hasMore.
+      const truncated = rows.length > HARD_LIMIT;
+      const shown = truncated ? rows.slice(0, HARD_LIMIT) : rows;
+      if (shown.length > 0 || sqlTokens(sql)[0] === "EXPLAIN") {
         // Bun values() retains duplicate labels' values but exposes no column metadata.
-        const columns = sqlTokens(sql)[0] === "EXPLAIN" ? ["QUERY PLAN"] : (rows[0] ?? []).map((_, index) => `Column ${index + 1}`);
-        result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, hasMore: false, offset: 0 };
+        const columns = sqlTokens(sql)[0] === "EXPLAIN" ? ["QUERY PLAN"] : (shown[0] ?? []).map((_, index) => `Column ${index + 1}`);
+        result = { columns, rows: shown.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, hasMore: truncated, offset: 0 };
       }
     } catch (e) {
       if (e instanceof DbError) throw e;

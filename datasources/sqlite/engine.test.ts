@@ -209,6 +209,14 @@ describe("runExec", () => {
     expect(() => runExec(path, "INSERT INTO posts (id, user_id) VALUES (1, 999)")).toThrow(DbError);
   });
 
+  test("multi-statement exec caps materialized rows at the hard limit", () => {
+    const path = join(dir, "app.db");
+    seed(path);
+    const r = runExec(path, "SELECT 1; WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 20000) SELECT x FROM c");
+    expect(r.result?.rows.length).toBe(10000);
+    expect(r.result?.hasMore).toBe(true);
+  });
+
   test("read-only mode runs read transactions and refuses writes", () => {
     const path = join(dir, "app.db");
     seed(path);

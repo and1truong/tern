@@ -24,6 +24,21 @@ test('migration validation rejects commit aliases and external SQLite files but 
   )).toContain('TRIGGER');
 });
 
+test('denylisted calls cannot be split across concatenated SCONST fragments', () => {
+  // Postgres folds adjacent '…' literals separated by a newline into one
+  // string server-side — each fragment alone tokenizes to nothing denylisted.
+  expect(() => validateMigrationSql(
+    "DO 'BEGIN PERFORM pg_termin'\n   'ate_backend(1) FROM pg_stat_activity; END';",
+    'postgres',
+  )).toThrow(/pg_terminate_backend/i);
+  expect(() => validateMigrationSql(
+    "CREATE FUNCTION f() RETURNS int AS 'SELECT pg_read' '_file(''x'')' LANGUAGE SQL;",
+    'postgres',
+  )).toThrow(/pg_read_file/i);
+  // A single-fragment body still validates on its own tokens.
+  expect(validateMigrationSql("DO 'BEGIN RAISE NOTICE ''ok''; END';", 'postgres')).toContain('DO');
+});
+
 test('migration scripts cannot override runner-managed settings', () => {
   // SET/RESET at statement start could disable the runner's own
   // statement_timeout; inside a trigger body the same words are fine.

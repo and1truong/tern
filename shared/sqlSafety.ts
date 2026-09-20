@@ -377,6 +377,11 @@ export function assertReadOnlyScript(sql: string, dialect: "sqlite" | "postgres"
       if ((tokens[0] === "BEGIN" || tokens[0] === "START") && tokens.includes("WRITE")) {
         throw new DbError("not_read_only", "read-only script contains BEGIN READ WRITE");
       }
+      // BEGIN IMMEDIATE/EXCLUSIVE take RESERVED/EXCLUSIVE file locks for the
+      // script's whole duration — a read-only path must not hold them.
+      if (dialect === "sqlite" && tokens[0] === "BEGIN" && (tokens.includes("IMMEDIATE") || tokens.includes("EXCLUSIVE"))) {
+        throw new DbError("not_read_only", "read-only script contains BEGIN IMMEDIATE/EXCLUSIVE");
+      }
       continue;
     }
     assertReadOnlySql(statement, dialect);

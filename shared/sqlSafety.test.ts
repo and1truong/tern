@@ -189,6 +189,16 @@ describe("assertReadOnlyScript", () => {
     expect(() => assertReadOnlyScript("BEGIN; PRAGMA user_version = 7; COMMIT", "sqlite")).toThrow(DbError);
   });
 
+  test("rejects lock-grabbing sqlite transaction starts", () => {
+    // BEGIN IMMEDIATE/EXCLUSIVE hold RESERVED/EXCLUSIVE file locks for the
+    // script's duration — a read-only exec must not take them.
+    expect(() => assertReadOnlyScript("BEGIN IMMEDIATE; SELECT 1; COMMIT", "sqlite")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("BEGIN EXCLUSIVE; SELECT 1; COMMIT", "sqlite")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("BEGIN DEFERRED; SELECT 1; COMMIT", "sqlite")).not.toThrow();
+    // Postgres has no IMMEDIATE/EXCLUSIVE transaction modes — unaffected.
+    expect(() => assertReadOnlyScript("BEGIN; SELECT 1; COMMIT", "postgres")).not.toThrow();
+  });
+
   test("rejects read-write transaction starts", () => {
     expect(() => assertReadOnlyScript("BEGIN READ WRITE; SELECT 1; COMMIT")).toThrow(DbError);
     expect(() => assertReadOnlyScript("START TRANSACTION READ WRITE; COMMIT", "postgres")).toThrow(DbError);
