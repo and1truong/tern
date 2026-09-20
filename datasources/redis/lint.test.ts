@@ -22,6 +22,16 @@ describe("lintCommand", () => {
   test("unbounded range variants are flagged", () => {
     const ro = { writable: true, cluster: false };
     const rules = (input: string) => lintCommand(input, ro).map(w => w.rule);
+    expect(rules("ZDIFFSTORE dst 2 a b")).toContain("unbounded-read");
+    expect(rules("ZRANGESTORE dst src 0 -1")).toContain("unbounded-read");
+    expect(rules("ZRANGESTORE dst src -inf +inf BYSCORE")).toContain("unbounded-read");
+    expect(rules("ZRANGESTORE dst src 0 9")).not.toContain("unbounded-read");
+    // Geo reads return every member in the radius unless COUNT caps them.
+    expect(rules("GEOSEARCH k FROMLONLAT 1 2 BYRADIUS 10 km")).toContain("unbounded-read");
+    expect(rules("GEOSEARCHSTORE dst src FROMLONLAT 1 2 BYRADIUS 10 km")).toContain("unbounded-read");
+    expect(rules("GEORADIUS k 1 2 10 km")).toContain("unbounded-read");
+    expect(rules("GEORADIUSBYMEMBER_RO k m 10 km")).toContain("unbounded-read");
+    expect(rules("GEOSEARCH k FROMLONLAT 1 2 BYRADIUS 10 km COUNT 5")).not.toContain("unbounded-read");
     expect(rules("ZREVRANGE k 0 -1")).toContain("unbounded-read");
     expect(rules("ZRANGEBYSCORE k -inf +inf")).toContain("unbounded-read");
     expect(rules("ZREVRANGEBYSCORE k +inf -inf")).toContain("unbounded-read");

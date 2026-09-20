@@ -48,6 +48,15 @@ describe("sessionUrl", () => {
   });
 });
 
+test("buildRedisUrl rejects a non-positive or non-integer database instead of mistargeting db 0", () => {
+  expect(() => buildRedisUrl({ host: "h", database: -3 })).toThrow(/db index/i);
+  expect(() => buildRedisUrl({ host: "h", database: NaN })).toThrow(/db index/i);
+  expect(() => buildRedisUrl({ host: "h", database: 2.5 })).toThrow(/db index/i);
+  // db 0 stays implicit; positive integers emit the path.
+  expect(buildRedisUrl({ host: "h", database: 0 })).toBe("redis://h:6379");
+  expect(buildRedisUrl({ host: "h", database: 3 })).toBe("redis://h:6379/3");
+});
+
 test("buildRedisUrl refuses URL-significant characters in the host", () => {
   expect(() => buildRedisUrl({ host: "a@b" })).toThrow(/host/i);
   expect(() => buildRedisUrl({ host: "a b" })).toThrow(/host/i);

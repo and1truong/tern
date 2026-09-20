@@ -101,6 +101,52 @@ describe("console exec", () => {
     await expect(session.console!.exec("GET k", { writable: true })).rejects.toBeInstanceOf(DbError);
   });
 
+  test("Bun <1.4 server errors (ERR_REDIS_INVALID_RESPONSE code) still land as err replies", async () => {
+    // Bun <1.4 lacks ERR_REDIS_SERVER_ERROR — server rejections carry the
+    // transport-level INVALID_RESPONSE code, so classification must consult
+    // the message prefix before treating any code as fatal.
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "GET") {
+        const error = new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+        (error as { code?: string }).code = "ERR_REDIS_INVALID_RESPONSE";
+        throw error;
+      }
+      return "PONG";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const result = await session.console!.exec("GET k", { writable: true });
+    expect(result.reply).toEqual({ t: "err", s: "WRONGTYPE Operation against a key holding the wrong kind of value" });
+  });
+
+  test("real protocol corruption still throws so the router evicts", async () => {
+    // A Bun-generated INVALID_RESPONSE message matches no server-error
+    // prefix — it stays a transport failure, which is what triggers the
+    // router's session eviction.
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "GET") {
+        const error = new Error("Invalid response from server");
+        (error as { code?: string }).code = "ERR_REDIS_INVALID_RESPONSE";
+        throw error;
+      }
+      return "PONG";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.console!.exec("GET k", { writable: true })).rejects.toBeInstanceOf(DbError);
+  });
+
+  test("an ACL-denied XLEN reports unknown length, not the page size", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "stream";
+      if (command === "XLEN") throw new Error("NOPERM this user has no permissions to run the 'xlen' command");
+      if (command === "XRANGE") return [["1-1", ["f", "v"]]];
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const page = await session.explorer!.inspect("st", undefined);
+    if (page.value.kind !== "stream") throw new Error("expected stream value");
+    expect(page.value.length).toBeNull();
+  });
+
   test("NOTBUSY is a routine command error, not a session-fatal transport failure", async () => {
     const { factory } = makeFake(INFO_REDIS, (command) => {
       if (command === "SCRIPT") throw new Error("NOTBUSY No scripts in execution right now.");

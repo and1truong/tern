@@ -161,7 +161,10 @@ function isUnboundedRead(name: string, args: string[]): boolean {
   // Whole-collection O(N) reads — the set/zset algebra commands read every
   // member of every key, the same stall risk as SMEMBERS; the *STORE
   // variants do the same read plus a write.
-  if (["SMEMBERS", "HGETALL", "HKEYS", "HVALS", "SINTER", "SUNION", "SDIFF", "ZINTER", "ZUNION", "ZDIFF", "SINTERSTORE", "SUNIONSTORE", "SDIFFSTORE", "ZINTERSTORE", "ZUNIONSTORE"].includes(name)) return true;
+  if (["SMEMBERS", "HGETALL", "HKEYS", "HVALS", "SINTER", "SUNION", "SDIFF", "ZINTER", "ZUNION", "ZDIFF", "SINTERSTORE", "SUNIONSTORE", "SDIFFSTORE", "ZINTERSTORE", "ZUNIONSTORE", "ZDIFFSTORE"].includes(name)) return true;
+  // The geo reads return every member inside the radius — potentially the
+  // whole zset — unless COUNT caps the reply (STOREDIST writes too).
+  if (["GEOSEARCH", "GEOSEARCHSTORE", "GEORADIUS", "GEORADIUSBYMEMBER", "GEORADIUS_RO", "GEORADIUSBYMEMBER_RO"].includes(name)) return !boundedTail(args, false);
   // *INTERCARD's LIMIT option caps the cardinality read.
   if (name === "SINTERCARD" || name === "ZINTERCARD") return !boundedTail(args, false);
   // SORT reads the whole collection (BY/GET multiply that per element);
@@ -199,13 +202,16 @@ function isUnboundedRead(name: string, args: string[]): boolean {
   if (name === "ZREVRANGEBYSCORE") return fullScore(args[2], args[1]) && !boundedTail(args, true);
   if (name === "ZRANGEBYLEX") return fullLex(args[1], args[2]) && !boundedTail(args, true);
   if (name === "ZREVRANGEBYLEX") return fullLex(args[2], args[1]) && !boundedTail(args, true);
-  if (name === "ZRANGE") {
-    const modifier = args.slice(3).find(a => a.toUpperCase() === "BYSCORE" || a.toUpperCase() === "BYLEX")?.toUpperCase();
+  // ZRANGESTORE dst src <bounds> … reads the same ranges ZRANGE does, then
+  // writes — its argument positions shift by one.
+  if (name === "ZRANGE" || name === "ZRANGESTORE") {
+    const base = name === "ZRANGESTORE" ? 2 : 1;
+    const modifier = args.slice(base + 2).find(a => a.toUpperCase() === "BYSCORE" || a.toUpperCase() === "BYLEX")?.toUpperCase();
     // With REV the bound order flips: the full score range is "+inf -inf".
-    const rev = args.slice(3).some(a => a.toUpperCase() === "REV");
-    if (modifier === "BYSCORE") return (rev ? fullScore(args[2], args[1]) : fullScore(args[1], args[2])) && !boundedTail(args, true);
-    if (modifier === "BYLEX") return (rev ? fullLex(args[2], args[1]) : fullLex(args[1], args[2])) && !boundedTail(args, true);
-    return fullIndex(args[1], args[2]);
+    const rev = args.slice(base + 2).some(a => a.toUpperCase() === "REV");
+    if (modifier === "BYSCORE") return (rev ? fullScore(args[base + 1], args[base]) : fullScore(args[base], args[base + 1])) && !boundedTail(args, true);
+    if (modifier === "BYLEX") return (rev ? fullLex(args[base + 1], args[base]) : fullLex(args[base], args[base + 1])) && !boundedTail(args, true);
+    return fullIndex(args[base], args[base + 1]);
   }
   return false;
 }

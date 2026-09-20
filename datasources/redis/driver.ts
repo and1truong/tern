@@ -117,10 +117,11 @@ const SESSION_FATAL_PREFIX = /^(NOAUTH|WRONGPASS|DENIED)\b/i;
 
 // A server-side command rejection — as opposed to a transport failure that
 // must evict the session. DbErrors carry their own code (a sendTimed
-// "timeout" must never match the message prefixes below). Bun tags server
-// error replies with ERR_REDIS_SERVER_ERROR; any other explicit .code is a
-// transport-level failure. The message prefixes only cover transports that
-// report server errors as bare Error messages.
+// "timeout" must never match the message prefixes below). Bun ≥1.4 tags
+// server error replies with ERR_REDIS_SERVER_ERROR; earlier Bun (the floor
+// is 1.3.5) reports them as ERR_REDIS_INVALID_RESPONSE, so the message
+// prefixes must run before the generic-code fallback — a real protocol
+// corruption carries a Bun-generated message that won't match them.
 function isCommandError(error: unknown): boolean {
   if (error instanceof DbError) return error.code === "command_error";
   const message = error instanceof Error ? error.message : String(error);
@@ -130,8 +131,9 @@ function isCommandError(error: unknown): boolean {
   if (SESSION_FATAL_PREFIX.test(message)) return false;
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "ERR_REDIS_SERVER_ERROR") return true;
+  if (COMMAND_ERROR_PREFIX.test(message)) return true;
   if (typeof code === "string" && code) return false;
-  return COMMAND_ERROR_PREFIX.test(message);
+  return false;
 }
 
 // The console shares one cached transport with the explorer: commands that
@@ -425,7 +427,9 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo,
         const hasMore = fetched.length > PAGE_SIZE;
         const entries = fetched.slice(0, PAGE_SIZE);
         const lastId = entries.length ? entries.at(-1)!.id : null;
-        return { kind: "stream", length: await number("XLEN", [key]) ?? entries.length, entries, lastId, truncated: hasMore && lastId !== null };
+        // null when XLEN is ACL-denied — reporting the page size as the
+        // stream's total would fabricate a count.
+        return { kind: "stream", length: await number("XLEN", [key]), entries, lastId, truncated: hasMore && lastId !== null };
       }
       default:
         return { kind: "unknown", note: `Server type '${type}' has no viewer` };

@@ -15,7 +15,9 @@ export function buildRedisUrl(opts: {
     ? `//${encodeURIComponent(opts.username ?? "")}:${encodeURIComponent(opts.password)}@`
     : "//";
   const port = opts.port ?? REDIS_DEFAULT_PORT;
-  const db = opts.database !== undefined && opts.database > 0 ? `/${opts.database}` : "";
+  // A negative or non-integer index must not silently collapse to db 0.
+  if (opts.database !== undefined && (!Number.isInteger(opts.database) || opts.database < 0)) throw new Error("The Redis database must be a non-negative db index");
+  const db = opts.database ? `/${opts.database}` : "";
   return `${opts.tls ? "rediss" : "redis"}:${auth}${host}:${port}${db}`;
 }
 
