@@ -203,8 +203,8 @@ export function App() {
         <header className="toolbar"><b id="access-title">Enable writes?</b></header>
         <div className="form-fields">
           <p>Allow changes to {sourceLabel(accessTarget)}?</p>
-          {accessTarget.kind === 'postgres' && accessTarget.environment === 'production' && <p className="error">This is a PRODUCTION connection.</p>}
-          <p>Row changes still require review and Apply transaction.</p>
+          {accessTarget.kind !== 'sqlite' && accessTarget.environment === 'production' && <p className="error">This is a PRODUCTION connection.</p>}
+          <p>{accessTarget.kind === 'redis' ? 'Key operations and console commands execute immediately.' : 'Row changes still require review and Apply transaction.'}</p>
           {error && <div role="alert" className="error">{error}</div>}
         </div>
         <footer className="toolbar justify-end">
