@@ -2,8 +2,13 @@
 // assembled into the shared DbSchema shape, plus CREATE-statement synthesis for
 // the Structure pane (Postgres has no sqlite_master.sql equivalent).
 import { open } from "./connect.ts";
+import { awaitControlled, type CancellableQuery } from "./cancel.ts";
 import { DbError } from "../../shared/types.ts";
 import type { DbSchema, DbTable, DbColumn } from "../../shared/types.ts";
+
+// Introspection queries are fixed SQL but still bounded — a stuck backend or
+// a huge catalog must not hang the request (or its pooled socket) forever.
+const INTROSPECT_TIMEOUT_MS = 60_000;
 
 export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
   const primary = new Set<string>();
@@ -30,11 +35,14 @@ export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
   return { primary, foreign, uniqueGroups };
 }
 
-export async function readPgSchema(url: string): Promise<DbSchema> {
+export async function readPgSchema(url: string, signal?: AbortSignal): Promise<DbSchema> {
   const db = await open(url);
+  const connection = await db.reserve();
+  const query = (sql: string) => awaitControlled(connection.unsafe(sql) as CancellableQuery<Record<string, unknown>[]>, signal, INTROSPECT_TIMEOUT_MS);
   try {
+    await query(`SET statement_timeout = ${INTROSPECT_TIMEOUT_MS}`);
     // Tables + views in user schemas, with column lists in one shot.
-    const cols = await db.unsafe(
+    const cols = await query(
       `SELECT t.table_schema, t.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               c.is_nullable, c.ordinal_position, c.column_default, a.attislocal,
               CASE WHEN a.attcollation <> typ.typcollation THEN format('%I.%I', cn.nspname, coll.collname) END AS collation,
@@ -63,7 +71,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
         ORDER BY t.table_schema, t.table_name, c.ordinal_position`,
     ) as Record<string, unknown>[];
 
-    const materializedColumns = await db.unsafe(
+    const materializedColumns = await query(
       `SELECT n.nspname AS table_schema, c.relname AS table_name,
               a.attname AS column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
@@ -79,7 +87,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     ) as Record<string, unknown>[];
     cols.push(...materializedColumns);
 
-    const materializedDefinitions = await db.unsafe(
+    const materializedDefinitions = await query(
       `SELECT schemaname AS table_schema, matviewname AS table_name, definition, ispopulated
          FROM pg_matviews
         WHERE schemaname NOT IN ('pg_catalog','information_schema')`,
@@ -88,7 +96,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       `${row.table_schema}\0${row.table_name}`,
       `CREATE MATERIALIZED VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}" AS\n${String(row.definition ?? "").trim().replace(/;$/, "")}${row.ispopulated === false ? "\nWITH NO DATA" : ""};`,
     ]));
-    const viewDefinitions = await db.unsafe(
+    const viewDefinitions = await query(
       `SELECT v.schemaname AS table_schema, v.viewname AS table_name, v.definition,
               (SELECT string_agg(format('%I = %L', option_name, option_value), ', ' ORDER BY option_name)
                 FROM pg_options_to_table(c.reloptions)) AS options
@@ -102,7 +110,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       `CREATE VIEW "${String(row.table_schema).replace(/"/g, '""')}"."${String(row.table_name).replace(/"/g, '""')}"${row.options ? ` WITH (${row.options})` : ""} AS\n${String(row.definition ?? "")}`,
     ]));
 
-    const comparableRows = await db.unsafe(
+    const comparableRows = await query(
       `WITH directly_comparable AS (
          SELECT candidate.oid
            FROM pg_type candidate
@@ -194,7 +202,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     ]));
 
     // Primary keys and foreign-key targets, keyed by table+column.
-    const keys = await db.unsafe(
+    const keys = await query(
       `SELECT n.nspname AS table_schema, rel.relname AS table_name, con.conname AS constraint_name,
               src.attname AS column_name,
               CASE con.contype WHEN 'p' THEN 'PRIMARY KEY' WHEN 'f' THEN 'FOREIGN KEY' ELSE 'UNIQUE' END AS constraint_type,
@@ -216,7 +224,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
 
     // Row-count estimates from the planner stats (fast; exact COUNT(*) is slow
     // on large tables). -1 where unknown, matching SQLite views.
-    const counts = await db.unsafe(
+    const counts = await query(
       `SELECT n.nspname AS table_schema, c.relname AS table_name,
               c.reltuples::bigint AS est
          FROM pg_class c
@@ -274,7 +282,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       table.uniqueKeys = [...uniqueGroups.entries()].filter(([key]) => key.startsWith(prefix)).map(([, columns]) => columns);
     }
     // Synthesize a minimal CREATE statement per table for the Structure pane's
-    const idx = await db.unsafe(
+    const idx = await query(
       `SELECT p.schemaname AS schema, p.tablename AS table_name, p.indexname AS name, p.indexdef AS sql,
               EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid AND con.contype IN ('p','u','x')) AS constraint_backed,
               CASE WHEN i.indisunique AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
@@ -298,7 +306,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       unique: /\bUNIQUE\b/i.test(String(r.sql ?? "")), sql: String(r.sql ?? ""),
     }));
 
-    const trg = await db.unsafe(
+    const trg = await query(
       `SELECT n.nspname AS schema, c.relname AS table_name, t.tgname AS name,
               CASE WHEN t.tgtype & 2 <> 0 THEN 'BEFORE' WHEN t.tgtype & 64 <> 0 THEN 'INSTEAD OF' ELSE 'AFTER' END AS timing,
               concat_ws(' OR ', CASE WHEN t.tgtype & 4 <> 0 THEN 'INSERT' END, CASE WHEN t.tgtype & 16 <> 0 THEN 'UPDATE' END,
@@ -315,7 +323,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       timing: String(r.timing), event: String(r.event), sql: String(r.sql ?? ""),
     }));
 
-    const constraintRows = await db.unsafe(
+    const constraintRows = await query(
       `SELECT n.nspname AS schema, c.relname AS table_name, con.conname AS name, con.conislocal,
               CASE con.contype WHEN 'p' THEN 'PRIMARY KEY' WHEN 'f' THEN 'FOREIGN KEY'
                 WHEN 'u' THEN 'UNIQUE' WHEN 'c' THEN 'CHECK' WHEN 'x' THEN 'EXCLUDE' ELSE con.contype::text END AS type,
@@ -385,7 +393,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       }
     }
 
-    const sequenceRows = await db.unsafe(
+    const sequenceRows = await query(
       `SELECT sequence_schema AS schema, sequence_name AS name, data_type,
               start_value, minimum_value, maximum_value, increment
          FROM information_schema.sequences
@@ -397,7 +405,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       definition: `${row.data_type} · start ${row.start_value} · increment ${row.increment}`,
     }));
 
-    const routineRows = await db.unsafe(
+    const routineRows = await query(
       `SELECT n.nspname AS schema,
               p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS name,
               CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END AS type,
@@ -412,14 +420,14 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
       name: String(row.name), schema: String(row.schema), type: String(row.type), definition: String(row.definition ?? ""),
     }));
 
-    const extensionRows = await db.unsafe(
+    const extensionRows = await query(
       `SELECT extname AS name, extversion AS version FROM pg_extension ORDER BY extname`,
     ) as Record<string, unknown>[];
     const extensions = extensionRows.map((row) => ({ name: String(row.name), definition: String(row.version ?? "") }));
 
     // Postgres has no pragmas; surface server metadata in the same kv shape so
     // the existing PragmasPane renders it unchanged.
-    const meta = await db.unsafe(
+    const meta = await query(
       `SELECT version() AS version, current_database() AS database,
               current_user AS "user",
               current_setting('server_encoding') AS encoding,
@@ -440,6 +448,7 @@ export async function readPgSchema(url: string): Promise<DbSchema> {
     if (e instanceof DbError) throw e;
     throw new DbError("not_a_database", e instanceof Error ? e.message : String(e));
   } finally {
+    connection.release();
     await db.close().catch(() => {});
   }
 }

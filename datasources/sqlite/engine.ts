@@ -240,7 +240,7 @@ export function assertReadOnly(sql: string): void {
 }
 
 export function runQuery(pathRaw: string, sql: string, params: unknown[], limitRaw?: number, offsetRaw?: number, exportAll = false): QueryResult {
-  const limit = exportAll ? 100_000 : Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
+  const limit = exportAll ? 100_000 : Math.min(Math.max(Math.floor(limitRaw ?? DEFAULT_LIMIT), 1), HARD_LIMIT);
   const offset = exportAll ? 0 : Math.max(Math.floor(offsetRaw ?? 0), 0);
   const boundedSql = boundReadSql(sql, limit, offset, "sqlite");
   const db = openRead(resolvePath(pathRaw), true);

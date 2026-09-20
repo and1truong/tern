@@ -270,10 +270,17 @@ export const PG_SIDE_EFFECT_FUNCTIONS = new Set([
   "PG_FILE_WRITE", "PG_FILE_UNLINK", "PG_FILE_RENAME", "PG_FILE_SYNC",
   "PG_EXECUTE_SERVER_PROGRAM",
   // Server-filesystem readers exfiltrate files the DB role can reach —
-  // confidential, not just side-effecting.
+  // confidential, not just side-effecting. The *_FILE_SETTINGS / hba/ident
+  // views expose postgresql.conf (archive_command/ssl_passphrase_command
+  // routinely carry credentials); pg_test_* write files server-side; the
+  // adminpack aliases predate PG10.
   "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_STAT_FILE",
   "PG_LS_DIR", "PG_LS_LOGDIR", "PG_LS_WALDIR", "PG_LS_TMPDIR",
   "PG_LS_ARCHIVE_STATUSDIR", "PG_LS_REPLSLOTDIR",
+  "PG_FILE_SETTINGS", "PG_SHOW_ALL_FILE_SETTINGS",
+  "PG_HBA_FILE_RULES", "PG_IDENT_FILE_MAPPINGS",
+  "PG_TEST_FSYNC", "PG_TEST_TIMING_TARGETS",
+  "PG_FILE_LENGTH", "PG_LOGDIR_LS",
   // pg_backup_start writes backup_label outside the transaction; the
   // walinspect family exposes raw WAL (same exfiltration class as the file
   // readers); pg_log_backend_memory_contexts writes server logs.
@@ -301,7 +308,7 @@ export const PG_SIDE_EFFECT_FUNCTIONS = new Set([
   // local read-only transaction does not cover; the connect/exec helpers
   // above are its siblings.
   "DBLINK", "DBLINK_CONNECT", "DBLINK_CONNECT_U", "DBLINK_EXEC", "DBLINK_SEND_QUERY",
-  "PG_NOTIFY", "PG_LOGICAL_SLOT_GET_CHANGES",
+  "PG_NOTIFY", "PG_LOGICAL_SLOT_GET_CHANGES", "PG_LOGICAL_SLOT_GET_BINARY_CHANGES",
 ]);
 
 const TRANSACTION_VERBS = new Set(["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE", "ABORT"]);

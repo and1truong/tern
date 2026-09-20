@@ -161,7 +161,7 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           }
           // Relational provider routes — sqlite paths and connId profiles alike.
           case "/schema":
-            return await withRelational(body, r => r.schema());
+            return await withRelational(body, r => r.schema(req.signal));
           case "/databases":
             return await withRelational(body, r => {
               if (!r.databases) throw new DbError("not_found", "This source lists no databases");

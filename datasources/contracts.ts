@@ -47,7 +47,7 @@ export interface RelationalQuery {
 // live connection — engines open per call (pg) or per subprocess (sqlite).
 export interface RelationalProvider {
   databases?(): Promise<string[]>;                     // postgres only
-  schema(): Promise<DbSchema>;
+  schema(signal?: AbortSignal): Promise<DbSchema>;
   insights(signal?: AbortSignal): Promise<DatabaseInsights>;
   query(q: RelationalQuery, signal?: AbortSignal): Promise<QueryResult>;
   explain(q: RelationalQuery, signal?: AbortSignal): Promise<QueryResult>;

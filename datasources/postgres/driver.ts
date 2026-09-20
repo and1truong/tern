@@ -34,8 +34,8 @@ export function makePostgresDriver(): DataSourceDriver {
           const result = await runPgQuery(url, "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname", [], 1000);
           return result.rows.map(row => String(row.datname));
         },
-        schema: () => readPgSchema(url),
-        insights: () => readPgInsights(url),
+        schema: (signal) => readPgSchema(url, signal),
+        insights: (signal) => readPgInsights(url, signal),
         query: (q, signal) => runPgQuery(url, q.sql, q.params ?? [], q.limit, q.offset, signal, q.timeoutMs, q.exportAll === true),
         explain: (q, signal) => explainPgQuery(url, q.sql, q.params ?? [], signal, q.timeoutMs),
         exec: (sql, writable, signal, timeoutMs) => runPgExec(url, sql, signal, timeoutMs, !writable),
