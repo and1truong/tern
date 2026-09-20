@@ -84,3 +84,9 @@ export function binaryByteLength(value: DbBinaryValue): number {
   const base64 = value[WIRE_TAG].base64;
   return Math.max(0, Math.floor(base64.length * 3 / 4) - (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0));
 }
+
+export function displayDbValue(value: unknown): string {
+  if (isDbBinaryValue(value)) return `<binary ${binaryByteLength(value).toLocaleString()} bytes>`;
+  value = unwrapDbValueForDisplay(value);
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}

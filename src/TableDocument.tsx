@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DbSchema, DbTable, QueryResult } from "../shared/types.ts";
 import { dbApi, type DbSource } from "./dbApi.ts";
-import { DataGrid, StructurePane } from "./DatabaseViews.tsx";
+import { DataGrid } from "./DataGrid.tsx";
+import { StructurePane } from "./StructurePane.tsx";
 import { DatabaseFilterBuilder } from "./DatabaseFilterBuilder.tsx";
 import { compileGroup, newGroup, type FilterModel } from "../shared/dbFilter.ts";
 import { orderBySql, paginationSorts, toggleSort, type SortSpec } from "../shared/dataGrid.ts";
