@@ -4,11 +4,13 @@ import type { DataSourceInfo } from "../shared/types.ts";
 
 // Redis-native key browser: incremental SCAN with pattern/type filters, plus
 // rename/delete/expire/persist. Never issues KEYS.
-export function RedisKeyExplorer({ source, info, activeKey, onOpenKey, onChanged }: {
+export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey, onRenamedKey, onChanged }: {
   source: RedisSource;
   info: DataSourceInfo | null;
+  writable: boolean;
   activeKey: string | null;
   onOpenKey(key: string): void;
+  onRenamedKey?(from: string, to: string): void;
   onChanged?(): void;
 }) {
   const [pattern, setPattern] = useState('*');
@@ -26,9 +28,11 @@ export function RedisKeyExplorer({ source, info, activeKey, onOpenKey, onChanged
     try {
       const cursor = reset ? '0' : page.cursor;
       const result = await dbApi.datasource.scan(source, { cursor, match: pattern.trim() || undefined, count: 120, type: type || undefined });
-      setPage(prev => reset
-        ? { cursor: result.cursor, keys: result.keys }
-        : { cursor: result.cursor, keys: [...prev.keys, ...result.keys] });
+      // SCAN may revisit keys (and pages may overlap) — dedupe by key name.
+      setPage(prev => {
+        const keys = reset ? result.keys : [...prev.keys, ...result.keys];
+        return { cursor: result.cursor, keys: [...new Map(keys.map(k => [k.key, k])).values()] };
+      });
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }, [source, pattern, type, page.cursor]);
@@ -41,8 +45,22 @@ export function RedisKeyExplorer({ source, info, activeKey, onOpenKey, onChanged
       const result = await dbApi.datasource.keyOp(source, body);
       if (!result.ok) setError(result.error ?? 'Operation failed');
       else { setRenaming(null); setDeleting(null); setExpiring(null); onChanged?.(); setApplied(a => a + 1); }
-    } catch (e) { setError(String(e)); }
+      return result;
+    } catch (e) { setError(String(e)); return null; }
     finally { setBusy(false); }
+  };
+
+  // RENAME overwrites an existing destination — confirm first, then retarget
+  // any open key document at the new name.
+  const submitRename = async (from: string, to: string) => {
+    if (to !== from) {
+      try {
+        const target = await dbApi.datasource.inspect(source, to);
+        if (target.value.kind !== 'none' && !window.confirm(`"${to}" already exists — overwrite it?`)) return;
+      } catch { /* existence check is best-effort; the op still runs */ }
+    }
+    const result = await op({ op: 'rename', from, to });
+    if (result?.ok && from === activeKey) onRenamedKey?.(from, to);
   };
 
   const typeBadge = (t: string) => ({ string: 'str', hash: 'hash', list: 'list', set: 'set', zset: 'zset', stream: 'stream' }[t] ?? t);
@@ -67,8 +85,8 @@ export function RedisKeyExplorer({ source, info, activeKey, onOpenKey, onChanged
         <div key={key} className="group">
           {renaming?.from === key ? <div className="px-3 py-1 text-xs space-y-1">
             <input aria-label="New key name" autoFocus value={renaming.to} onChange={e => setRenaming({ ...renaming, to: e.target.value })}
-              onKeyDown={e => { if (e.key === 'Enter') void op({ op: 'rename', from: key, to: renaming.to }); }} className="w-full bg-[var(--bg)] border border-[var(--border)] p-1" />
-            <div className="flex gap-1"><button className="primary text-xs" disabled={busy} onClick={() => void op({ op: 'rename', from: key, to: renaming.to })}>Rename</button><button className="text-xs" onClick={() => setRenaming(null)}>Cancel</button></div>
+              onKeyDown={e => { if (e.key === 'Enter') void submitRename(key, renaming.to); }} className="w-full bg-[var(--bg)] border border-[var(--border)] p-1" />
+            <div className="flex gap-1"><button className="primary text-xs" disabled={busy} onClick={() => void submitRename(key, renaming.to)}>Rename</button><button className="text-xs" onClick={() => setRenaming(null)}>Cancel</button></div>
           </div> : deleting === key ? <div className="px-3 py-1 text-xs space-y-1">
             <p className="text-[var(--danger)]">Delete “{key}”?</p>
             <div className="flex gap-1"><button className="primary text-xs" disabled={busy} onClick={() => void op({ op: 'delete', keys: [key] })}>Delete</button><button className="text-xs" onClick={() => setDeleting(null)}>Cancel</button></div>
@@ -81,12 +99,12 @@ export function RedisKeyExplorer({ source, info, activeKey, onOpenKey, onChanged
               <span className="mono text-[9px] text-[var(--faint)] uppercase">{typeBadge(keyType)}</span>
               <span className="truncate">{key}</span>
             </button>
-            <span className="hidden group-hover:flex gap-1">
+            {writable && <span className="hidden group-hover:flex gap-1">
               <button aria-label={`Rename ${key}`} onClick={() => setRenaming({ from: key, to: key })}>✎</button>
               <button aria-label={`Expire ${key}`} onClick={() => setExpiring({ key, seconds: '3600' })}>⏱</button>
               <button aria-label={`Persist ${key}`} disabled={busy} onClick={() => void op({ op: 'persist', key })}>⏳</button>
               <button aria-label={`Delete ${key}`} className="text-[var(--danger)]" onClick={() => setDeleting(key)}>×</button>
-            </span>
+            </span>}
           </div>}
         </div>
       ))}

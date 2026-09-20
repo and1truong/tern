@@ -58,11 +58,16 @@ export function completeCommand(input: string, opts: { keys?: string[]; max?: nu
   }
   if (hasKeyArgAt(doc, argIndex) && opts.keys) {
     for (const key of opts.keys) {
-      if (key.toLowerCase().startsWith(lower)) completions.push({ label: key, kind: "key", insert: key });
+      if (key.toLowerCase().startsWith(lower)) completions.push({ label: key, kind: "key", insert: quoteKey(key) });
     }
   }
   return completions.slice(0, max);
 }
+
+// Keys containing whitespace or quotes must be inserted quoted, or the
+// completion would splice into multiple arguments.
+const quoteKey = (key: string) =>
+  key === "" || /[\s"']/.test(key) ? `"${key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : key;
 
 export interface ArgumentHint {
   doc: CommandDoc | null;
@@ -107,6 +112,15 @@ function hasKeyArgAt(doc: CommandDoc, argIndex: number): boolean {
   return spec?.type === "key";
 }
 
+// Whether the argument currently being typed fills a key spec — used by the
+// console to decide when live key-name suggestions are worth fetching.
+export function expectsKeyArg(input: string): boolean {
+  const { tokens } = splitPartial(input);
+  if (!tokens.length) return false;
+  const doc = lookupCommand(tokens[0]!);
+  return doc !== null && hasKeyArgAt(doc, tokens.length - 1);
+}
+
 export function specForPosition(doc: CommandDoc, argIndex: number): CommandArgSpec | null {
   const specs = doc.args;
   if (!specs?.length) return null;
@@ -119,7 +133,9 @@ export function specForPosition(doc: CommandDoc, argIndex: number): CommandArgSp
     if (argIndex === i) return spec;
     i++;
   }
-  return specs.at(-1) ?? null;
+  // Past the declared arity only a variadic trailing spec still applies.
+  const last = specs.at(-1);
+  return last?.multiple ? last : null;
 }
 
 let cachedNames: string[] | null = null;

@@ -103,12 +103,21 @@ export function lintCommand(input: string, opts: { writable: boolean; cluster: b
 
 function isUnboundedRead(name: string, args: string[]): boolean {
   if (["SMEMBERS", "HGETALL", "HKEYS", "HVALS"].includes(name)) return true;
-  if (name === "LRANGE") return args[1] === "0" && args[2] === "-1";
+  const fullIndex = (a?: string, b?: string) => a === "0" && b === "-1";
+  const fullScore = (min?: string, max?: string) => min === "-inf" && max === "+inf";
+  const fullLex = (min?: string, max?: string) => min === "-" && max === "+";
+  if (name === "LRANGE") return fullIndex(args[1], args[2]);
+  if (name === "ZREVRANGE") return fullIndex(args[1], args[2]);
+  if (name === "ZRANGEBYSCORE") return fullScore(args[1], args[2]);
+  // REV variants take the range bounds in reverse order (max then min).
+  if (name === "ZREVRANGEBYSCORE") return fullScore(args[2], args[1]);
+  if (name === "ZRANGEBYLEX") return fullLex(args[1], args[2]);
+  if (name === "ZREVRANGEBYLEX") return fullLex(args[2], args[1]);
   if (name === "ZRANGE") {
-    const index = args.findIndex(a => a.toUpperCase() === "BYSCORE" || a.toUpperCase() === "BYLEX");
-    const start = index === -1 ? args[1] : undefined;
-    const stop = index === -1 ? args[2] : undefined;
-    return start === "0" && stop === "-1";
+    const modifier = args.slice(3).find(a => a.toUpperCase() === "BYSCORE" || a.toUpperCase() === "BYLEX")?.toUpperCase();
+    if (modifier === "BYSCORE") return fullScore(args[1], args[2]);
+    if (modifier === "BYLEX") return fullLex(args[1], args[2]);
+    return fullIndex(args[1], args[2]);
   }
   return false;
 }

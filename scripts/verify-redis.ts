@@ -27,6 +27,7 @@ async function reachable(url: string): Promise<boolean> {
 
 async function verify(name: string, url: string, expectFlavor: "redis" | "valkey") {
   console.log(`\n== ${name} (${url})`);
+  const failuresBefore = failures;
   const driver = makeRedisDriver();
   const info = await driver.test({ url });
   check(`${name}: flavor is ${expectFlavor}`, info.flavor === expectFlavor, info.flavor);
@@ -94,6 +95,7 @@ async function verify(name: string, url: string, expectFlavor: "redis" | "valkey
     await console_.exec(`SET ${keys.s} plain`, { writable: true });
     const bad = await console_.exec(`HGET ${keys.s} f`, { writable: true });
     check(`${name}: WRONGTYPE surfaces as err reply`, bad.reply.t === "err" && /WRONGTYPE/.test((bad.reply as { s?: string }).s ?? ""), bad.reply);
+    await explorer.keyOp({ op: "delete", keys: [keys.s] });
     const indefinite = await console_.exec("BLPOP no-queue 0", { writable: true });
     check(`${name}: indefinite BLPOP refused`, indefinite.reply.t === "err", indefinite.reply);
 
@@ -103,7 +105,7 @@ async function verify(name: string, url: string, expectFlavor: "redis" | "valkey
   } finally {
     await session.close();
   }
-  console.log(`PASS ${name}`);
+  if (failures === failuresBefore) console.log(`PASS ${name}`);
 }
 
 async function main() {

@@ -3,7 +3,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { dbApi, type RedisSource } from "./dbApi.ts";
 import type { CommandResult, DataSourceInfo, RespValue } from "../shared/types.ts";
-import { completeCommand, argumentHint } from "../datasources/redis/autocomplete.ts";
+import { completeCommand, argumentHint, expectsKeyArg } from "../datasources/redis/autocomplete.ts";
 import { explainCommand, type CommandExplanation } from "../datasources/redis/explain.ts";
 import { lintCommand } from "../datasources/redis/lint.ts";
 import { boundConsoleHistory } from "./consoleHistory.ts";
@@ -71,6 +71,7 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveVersion = useRef(0);
   const keyFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runAbort = useRef<AbortController | null>(null);
   const latest = useRef(consoleState);
   latest.current = consoleState;
 
@@ -108,47 +109,57 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
   const update = (input: string) => {
     persist({ ...consoleState, input });
     setSuggestions(completeCommand(input, { keys: knownKeys }));
-    // Refresh key-name suggestions while completing a key argument.
+    // Refresh key-name suggestions only while completing a key argument —
+    // scanning for command-name prefixes is wasted work.
     if (keyFetchTimer.current) clearTimeout(keyFetchTimer.current);
-    keyFetchTimer.current = setTimeout(async () => {
-      try {
-        const prefix = input.trim().split(/\s+/).pop() ?? "";
-        if (prefix && !prefix.includes(" ")) {
+    if (expectsKeyArg(input)) {
+      keyFetchTimer.current = setTimeout(async () => {
+        try {
+          const prefix = input.trim().split(/\s+/).pop() ?? "";
           const page = await dbApi.datasource.scan(source, { cursor: "0", match: `${prefix.replace(/[\\*?\[\]]/g, "\\$&")}*`, count: 20 });
           setKnownKeys(page.keys.map(k => k.key));
-        }
-      } catch { /* suggestions are best-effort */ }
-    }, 300);
+        } catch { /* suggestions are best-effort */ }
+      }, 300);
+    }
   };
 
   const run = async () => {
     if (busy || !ready) return;
     const lines = consoleState.input.split(/\n/).map(l => l.trim()).filter(Boolean);
     if (!lines.length) return;
-    setBusy(true); setError(''); setOutputs([]);
+    const controller = new AbortController();
+    runAbort.current = controller;
+    setBusy(true); setError(''); setOutputs([]); setSuggestions([]);
     const entries: OutputEntry[] = [];
     let next = consoleState;
     for (const command of lines) {
       const entry: OutputEntry = { command, at: Date.now() };
       try {
-        const result = await dbApi.datasource.exec(source, command);
+        const result = await dbApi.datasource.exec(source, command, controller.signal);
         entry.result = result;
         onLatency(result.ms);
-      } catch (e) { entry.error = String(e); }
+      } catch (e) { entry.error = controller.signal.aborted ? "Cancelled" : String(e); }
       entries.push(entry);
       setOutputs([...entries]);
       if (entry.error || entry.result?.reply.t === "err") break;
       next = { ...next, history: [{ command, at: Date.now() }, ...next.history.filter(h => h.command !== command)].slice(0, 100) };
     }
+    runAbort.current = null;
     persist(next);
     setBusy(false);
   };
 
   const insertSuggestion = (insert: string) => {
-    // Replace the trailing partial token with the accepted completion.
-    const base = consoleState.input.replace(/\S*$/, "");
-    const nextInput = base + insert;
-    persist({ ...consoleState, input: nextInput });
+    // Replace the trailing partial token with the accepted completion; when
+    // the partial sits inside an open quote, drop the dangling fragment too.
+    let base = consoleState.input.replace(/\S*$/, "");
+    const unclosed = (q: '"' | "'") => {
+      const body = q === '"' ? base.replace(/\\./g, "") : base;
+      return (body.split(q).length - 1) % 2 === 1;
+    };
+    if (unclosed('"')) base = base.replace(/"[^"]*$/, "");
+    else if (unclosed("'")) base = base.replace(/'[^']*$/, "");
+    persist({ ...consoleState, input: base + insert });
     setSuggestions([]);
   };
 
@@ -164,6 +175,7 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
   }}>
     <div className="toolbar flex-wrap">
       <span>{flavorLabel} · {writable ? "Writable" : "Read Only"} · db {source.database}</span>
+      {busy && <button onClick={() => runAbort.current?.abort()}>Cancel</button>}
       <button className="ml-auto" onClick={() => setExplainOpen(!explainOpen)}>{explainOpen ? "Hide explain" : "Explain"}</button>
       <button onClick={() => setHistoryOpen(!historyOpen)}>Command history</button>
     </div>

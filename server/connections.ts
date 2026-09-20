@@ -115,6 +115,10 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       const readOnly = options.readOnly ?? true;
       const secretName = `connection:${id}`;
       const secret = hasPassword(url) ? secretName : null;
+      // Capture the prior credential so a failed upsert cannot orphan the
+      // surviving row's secret.
+      const prior = options.id !== undefined ? row(options.id) : null;
+      const priorSecret = prior?.secret_name === secretName ? await secrets.get(secretName) : null;
       if (secret) await secrets.set(secret, url);
       else await secrets.delete(secretName).catch(() => false);
       try {
@@ -123,7 +127,8 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
             "ON CONFLICT(id) DO UPDATE SET label = excluded.label, driver = excluded.driver, url = excluded.url, secret_name = excluded.secret_name, environment = excluded.environment, read_only = excluded.read_only",
         ).run(id, label, driver, sanitizedUrl(url), secret, environment, readOnly ? 1 : 0);
       } catch (error) {
-        if (secret) await secrets.delete(secret).catch(() => false);
+        if (priorSecret !== null) await secrets.set(secretName, priorSecret).catch(() => {});
+        else if (secret) await secrets.delete(secret).catch(() => false);
         throw error;
       }
       const saved = await api.get(id);

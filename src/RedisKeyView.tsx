@@ -25,6 +25,9 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
 
   const load = useCallback(async (cursor?: string) => {
     setBusy(true); setError('');
+    // Reloading must drop armed/in-progress state so a stale confirmation
+    // cannot fire against refreshed data (or a retargeted key).
+    setConfirmDelete(false); setRenamed(null); setNewScore(null); setListDraft(null);
     try {
       const next = await dbApi.datasource.inspect(source, keyName, cursor);
       setInspection(prev => cursor && prev
@@ -60,9 +63,15 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
       <span className="ml-auto flex gap-1 items-center">
         {renamed && <span className="flex gap-1"><input aria-label="New key name" value={renamed.to} onChange={e => setRenamed({ to: e.target.value })} className="bg-[var(--bg)] border border-[var(--border)] p-1 text-xs" /><button className="primary text-xs" disabled={busy} onClick={() => {
           const to = renamed.to;
-          void mutate({ op: 'rename', from: keyName, to }).then(result => {
-            setRenamed(null);
-            if (result?.ok) onRenamed?.(to);   // retarget this document at the new key
+          // RENAME overwrites an existing destination — confirm first.
+          const check = to === keyName ? Promise.resolve(true)
+            : dbApi.datasource.inspect(source, to).then(target => target.value.kind === 'none' || window.confirm(`"${to}" already exists — overwrite it?`)).catch(() => true);
+          void check.then(proceed => {
+            if (!proceed) return;
+            void mutate({ op: 'rename', from: keyName, to }).then(result => {
+              setRenamed(null);
+              if (result?.ok) onRenamed?.(to);   // retarget this document at the new key
+            });
           });
         }}>Rename</button><button className="text-xs" onClick={() => setRenamed(null)}>×</button></span>}
         {!renamed && writable && <button disabled={busy} onClick={() => setRenamed({ to: keyName })}>Rename</button>}
@@ -88,7 +97,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
       {v.kind === 'hash' && <div className="space-y-2">
         <table className="w-full text-xs">
           <thead><tr className="text-left text-[var(--faint)]"><th className="w-1/3">field</th><th>value</th>{writable && <th className="w-16"></th>}</tr></thead>
-          <tbody>{v.entries.map(e => <HashRow key={e.field} entry={e} busy={busy} onSave={(value) => void mutate({ op: 'hashSet', key: keyName, field: e.field, value })} onDelete={() => void mutate({ op: 'hashDelete', key: keyName, fields: [e.field] })} />)}</tbody>
+          <tbody>{v.entries.map(e => <HashRow key={e.field} entry={e} busy={busy} writable={writable} onSave={(value) => void mutate({ op: 'hashSet', key: keyName, field: e.field, value })} onDelete={() => void mutate({ op: 'hashDelete', key: keyName, fields: [e.field] })} />)}</tbody>
         </table>
         {writable && <form className="flex gap-1" onSubmit={e => { e.preventDefault(); if (newField.field) { void mutate({ op: 'hashSet', key: keyName, field: newField.field, value: newField.value }); setNewField({ field: '', value: '' }); } }}>
           <input value={newField.field} onChange={e => setNewField({ ...newField, field: e.target.value })} placeholder="field" className="w-1/3 bg-[var(--bg)] border border-[var(--border)] p-1" />
@@ -118,7 +127,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
         <tbody>{v.entries.map(e => <tr key={e.member} className="border-t border-[var(--border)]">
           <td className="py-1 font-mono break-all">{e.member}</td>
           <td className="py-1">{newScore?.member === e.member
-            ? <span className="flex gap-1"><input autoFocus type="number" step="any" value={newScore.score} onChange={ev => setNewScore({ ...newScore, score: ev.target.value })} className="w-20 bg-[var(--bg)] border border-[var(--border)] p-1" /><button className="primary text-xs" disabled={busy} onClick={() => { void mutate({ op: 'zsetAdd', key: keyName, member: e.member, score: Number(newScore.score) }); setNewScore(null); }}>Save</button><button className="text-xs" onClick={() => setNewScore(null)}>×</button></span>
+            ? <span className="flex gap-1"><input autoFocus type="number" step="any" value={newScore.score} onChange={ev => setNewScore({ ...newScore, score: ev.target.value })} className="w-20 bg-[var(--bg)] border border-[var(--border)] p-1" /><button className="primary text-xs" disabled={busy || newScore.score.trim() === '' || !Number.isFinite(Number(newScore.score))} title={newScore.score.trim() === '' || !Number.isFinite(Number(newScore.score)) ? 'Score must be a finite number' : undefined} onClick={() => { void mutate({ op: 'zsetAdd', key: keyName, member: e.member, score: Number(newScore.score) }); setNewScore(null); }}>Save</button><button className="text-xs" onClick={() => setNewScore(null)}>×</button></span>
             : <span className="flex gap-2 items-center"><span className="mono">{e.score}</span>{writable && <button aria-label={`Edit score for ${e.member}`} onClick={() => setNewScore({ member: e.member, score: String(e.score) })}>✎</button>}</span>}
           </td>
           {writable && <td><button aria-label={`Remove ${e.member}`} className="text-[var(--danger)]" disabled={busy} onClick={() => void mutate({ op: 'zsetRemove', key: keyName, members: [e.member] })}>×</button></td>}
@@ -158,17 +167,17 @@ function mergePage(previous: KeyInspection, next: KeyInspection): KeyInspection 
   return next;
 }
 
-function HashRow({ entry, busy, onSave, onDelete }: {
-  entry: { field: string; value: string }; busy: boolean;
+function HashRow({ entry, busy, writable, onSave, onDelete }: {
+  entry: { field: string; value: string }; busy: boolean; writable: boolean;
   onSave(value: string): void; onDelete(): void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   return <tr className="border-t border-[var(--border)]">
     <td className="py-1 font-mono break-all pr-2">{entry.field}</td>
     <td className="py-1">{draft === null
-      ? <span className="flex gap-2 items-center"><span className="font-mono break-all flex-1">{entry.value}</span>{!busy && <button aria-label={`Edit field ${entry.field}`} onClick={() => setDraft(entry.value)}>✎</button>}</span>
+      ? <span className="flex gap-2 items-center"><span className="font-mono break-all flex-1">{entry.value}</span>{writable && !busy && <button aria-label={`Edit field ${entry.field}`} onClick={() => setDraft(entry.value)}>✎</button>}</span>
       : <span className="flex gap-1"><input autoFocus value={draft} onChange={e => setDraft(e.target.value)} className="flex-1 bg-[var(--bg)] border border-[var(--border)] p-1" /><button className="primary text-xs" disabled={busy} onClick={() => { onSave(draft); setDraft(null); }}>Save</button><button className="text-xs" onClick={() => setDraft(null)}>×</button></span>}
     </td>
-    <td>{!busy && <button aria-label={`Delete field ${entry.field}`} className="text-[var(--danger)]" onClick={onDelete}>×</button>}</td>
+    {writable && <td>{!busy && <button aria-label={`Delete field ${entry.field}`} className="text-[var(--danger)]" onClick={onDelete}>×</button>}</td>}
   </tr>;
 }
