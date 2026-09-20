@@ -5,7 +5,7 @@
 import {
   DbError,
   type CommandResult, type DataSourceInfo, type KeyInspection, type KeyOp, type KeyOpResult, type ScanPage,
-} from "../../shared.ts";
+} from "../../shared/types.ts";
 import type {
   ConnectionConfig, ConsoleProvider, DataSourceDriver, ExecContext,
   KeyValueExplorerProvider, ScanQuery,

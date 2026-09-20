@@ -1,4 +1,4 @@
-import { DbError } from "../shared.ts";
+import { DbError } from "../shared/types.ts";
 
 export interface CancellableQuery<T> extends PromiseLike<T> {
   cancel(): unknown;

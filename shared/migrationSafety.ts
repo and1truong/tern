@@ -1,4 +1,4 @@
-import { DbError } from "../shared.ts";
+import { DbError } from "./types.ts";
 import { sqlTokens } from "./sqlSafety.ts";
 
 export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string {

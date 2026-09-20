@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { compileRowChange, compileRowChanges, toPostgresMutationSql } from "./rowMutations.ts";
-import { DbError } from "../shared.ts";
+import { DbError } from "./types.ts";
 
 describe("structured row mutations", () => {
   test("compiles an optimistic update with a qualified relation", () => {

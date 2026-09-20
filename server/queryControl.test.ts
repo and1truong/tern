@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { awaitControlled } from "./queryControl.ts";
-import { DbError } from "../shared.ts";
+import { DbError } from "../shared/types.ts";
 
 function pendingQuery<T>() {
   let reject!: (error: Error) => void;

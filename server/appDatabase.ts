@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, basename, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { migrations } from "./migrations.ts";
-import type { DbFile } from "../shared.ts";
+import type { DbFile } from "../shared/types.ts";
 
 export function openAppDatabase(path?: string) {
   if (path === undefined) {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildRowChanges, coerceCellValue, editKey, orderBySql, paginationSorts, rowIdentity, rowsToCsv, toggleSort } from "./dataGrid.ts";
-import type { DbTable } from "../shared.ts";
-import { encodeDbValue } from "../binaryValues.ts";
+import type { DbTable } from "./types.ts";
+import { encodeDbValue } from "./binaryValues.ts";
 
 describe("data-grid query helpers", () => {
   test("cycles a primary sort through asc, desc, and off", () => {

@@ -1,6 +1,6 @@
-import type { DbTableRef, RowChange, RowChangeStatement } from "../shared.ts";
-import { DbError } from "../shared.ts";
-import { decodeDbValue } from "../binaryValues.ts";
+import type { DbTableRef, RowChange, RowChangeStatement } from "./types.ts";
+import { DbError } from "./types.ts";
+import { decodeDbValue } from "./binaryValues.ts";
 
 const MAX_CHANGES = 500;
 

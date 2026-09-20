@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { dbApi, type RedisSource } from "./dbApi.ts";
-import type { KeyInspection } from "../shared.ts";
+import type { KeyInspection } from "../shared/types.ts";
 
 // Type-aware viewer/editor for one Redis key. Edits are explicit actions
 // (never implicit), and the server still enforces read-only sessions.

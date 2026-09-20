@@ -3,7 +3,7 @@
 // implementations, e.g. datasources/redis/driver.ts).
 import type {
   CommandResult, DataSourceInfo, KeyInspection, KeyOp, KeyOpResult, ScanPage,
-} from "../shared.ts";
+} from "../shared/types.ts";
 import type { CommandDoc } from "./redis/catalog.ts";
 
 export interface ConnectionConfig {

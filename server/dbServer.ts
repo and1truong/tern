@@ -1,15 +1,15 @@
-import { splitSqlStatements } from "../src/sqlConsole.ts";
-import { validateMigrationSql } from "./migrationSafety.ts";
+import { splitSqlStatements } from "../shared/sqlConsole.ts";
+import { validateMigrationSql } from "../shared/migrationSafety.ts";
 import { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { join, isAbsolute, normalize } from "node:path";
 import { homedir } from "node:os";
-import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, DatabaseInsights, MigrationResult } from "../shared.ts";
-import { DbError } from "../shared.ts";
-import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, normalizeSingleStatement, sqlTokens } from "./sqlSafety.ts";
-import { compileRowChanges } from "./rowMutations.ts";
-import { encodeDbValue } from "../binaryValues.ts";
-export { DbError } from "../shared.ts";
+import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, DatabaseInsights, MigrationResult } from "../shared/types.ts";
+import { DbError } from "../shared/types.ts";
+import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, normalizeSingleStatement, sqlTokens } from "../shared/sqlSafety.ts";
+import { compileRowChanges } from "../shared/rowMutations.ts";
+import { encodeDbValue } from "../shared/binaryValues.ts";
+export { DbError } from "../shared/types.ts";
 
 const DEFAULT_LIMIT = 1000;
 const HARD_LIMIT = 10000;

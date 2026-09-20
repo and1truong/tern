@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { makeDatasourceRouter, type Profiles } from "./router.ts";
 import { createDriverRegistry } from "./registry.ts";
 import type { DataSourceDriver, DriverSession } from "./contracts.ts";
-import { DbError, type DataSourceInfo } from "../shared.ts";
+import { DbError, type DataSourceInfo } from "../shared/types.ts";
 
 const INFO: DataSourceInfo = {
   flavor: "redis", version: "7.2.4",

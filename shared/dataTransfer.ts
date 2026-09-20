@@ -1,6 +1,6 @@
-import type { DbTable } from "../shared.ts";
+import type { DbTable } from "./types.ts";
 import { tableSql } from "./sqlIdentifiers.ts";
-import { decodeDbValue, isDbBinaryValue, isDbSpecialNumber, unwrapDbValueForDisplay } from "../binaryValues.ts";
+import { decodeDbValue, isDbBinaryValue, isDbSpecialNumber, unwrapDbValueForDisplay } from "./binaryValues.ts";
 
 export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 

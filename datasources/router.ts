@@ -1,7 +1,7 @@
 // Generic /api/datasource router: resolves a saved profile to its driver via
 // the registry, caches sessions, and dispatches by capability provider. The
 // core never names a backend — drivers appear only through DataSourceDriver.
-import { DbError } from "../shared.ts";
+import { DbError } from "../shared/types.ts";
 import type { DataSourceDriver, DriverRegistry, DriverSession } from "./contracts.ts";
 import { dbErrorResponse } from "../server/routeHandlers.ts";
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { quoteIdent, tableKey, tableLabel, tableSql } from "./sqlIdentifiers.ts";
-import type { DbTable } from "../shared.ts";
+import type { DbTable } from "./types.ts";
 
 const table = (name: string, schema?: string): DbTable => ({
   name, schema, type: "table", columns: [], rowCount: -1, ddl: "",

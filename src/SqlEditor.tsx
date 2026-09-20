@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
-import type { DbSchema, ExecResult, QueryResult } from "../shared.ts";
+import type { DbSchema, ExecResult, QueryResult } from "../shared/types.ts";
 import { dbApi } from "./dbApi.ts";
 import type { DbSource } from "./dbApi.ts";
-import { isWriteSql, sqlToRun, executionUnits } from "./sqlConsole.ts";
+import { isWriteSql, sqlToRun, executionUnits } from "../shared/sqlConsole.ts";
 import Notice from "./Notice.tsx";
-import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../binaryValues.ts";
+import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../shared/binaryValues.ts";
 import { boundConsoleHistory } from "./consoleHistory.ts";
 
 interface ConsoleTab { id: string; name: string; sql: string }

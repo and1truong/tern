@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { compileGroup, previewWhere, groupHasActive, newRule, defaultOp, opsFor, MAX_DEPTH, type FilterModel } from "./dbFilter.ts";
-import type { DbColumn } from "../shared.ts";
+import type { DbColumn } from "./types.ts";
 
 const cols: DbColumn[] = [
   { name: "id", type: "INTEGER", notNull: true, pk: true, fk: null },

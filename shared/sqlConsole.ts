@@ -1,4 +1,4 @@
-import { READ_PRAGMAS } from "../server/sqlSafety.ts";
+import { READ_PRAGMAS } from "./sqlSafety.ts";
 type Dialect = "sqlite" | "postgres";
 export interface SqlSelection { from: number; to: number }
 

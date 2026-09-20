@@ -3,7 +3,7 @@
 // effects, cluster implications and safety risks. Pure and offline.
 import { blockingTimeoutSeconds, lookupCommand, commandKeys, argRoles, type CommandDoc } from "./catalog.ts";
 import { tokenizeCommand } from "./resp.ts";
-import type { Capabilities } from "../../shared.ts";
+import type { Capabilities } from "../../shared/types.ts";
 
 export interface CommandExplanation {
   name: string;

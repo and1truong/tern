@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Database, Plus, RefreshCw, Terminal, Network, Activity, FileCode, KeyRound } from "lucide-react";
 import { dbApi, type DbSource } from "./dbApi.ts";
-import type { DbSchema, DataSourceInfo } from "../shared.ts";
+import type { DbSchema, DataSourceInfo } from "../shared/types.ts";
 import { DatabaseCreateViewModal } from "./DatabaseCreateViewModal.tsx";
 import { DatabaseOpenModal } from "./DatabaseOpenModal.tsx";
 import { ObjectTree, SchemaDiagramPane, InsightsPane, PragmasPane } from "./DatabaseViews.tsx";
@@ -11,7 +11,7 @@ import { RedisKeyExplorer } from "./RedisKeyExplorer.tsx";
 import { RedisKeyView } from "./RedisKeyView.tsx";
 import { RedisConsole } from "./RedisConsole.tsx";
 import { DatabaseMigrationModal } from "./DatabaseMigrationModal.tsx";
-import { tableKey, tableLabel } from "./sqlIdentifiers.ts";
+import { tableKey, tableLabel } from "../shared/sqlIdentifiers.ts";
 import { sourceId, sourceLabel, isDocuments, type Document } from "./documents.ts";
 
 export function App() {

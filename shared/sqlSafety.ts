@@ -1,4 +1,4 @@
-import { DbError } from "../shared.ts";
+import { DbError } from "./types.ts";
 
 const READ_VERBS = new Set(["SELECT", "WITH", "EXPLAIN", "VALUES", "PRAGMA", "SHOW"]);
 export const READ_PRAGMAS = new Set([

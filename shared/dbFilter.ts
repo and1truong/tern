@@ -1,4 +1,4 @@
-import type { DbColumn } from "../shared.ts";
+import type { DbColumn } from "./types.ts";
 
 // Maximum group-nesting depth (root group = depth 0). Bump to allow deeper trees.
 export const MAX_DEPTH = 12;

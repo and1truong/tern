@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
-import { DbError } from "../shared.ts";
+import { DbError } from "./types.ts";
 
 describe("SQL read-only safety", () => {
   test("ignores keywords and semicolons in strings, identifiers, and comments", () => {

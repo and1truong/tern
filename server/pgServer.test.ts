@@ -1,10 +1,10 @@
-import { executionUnits, splitSqlStatements, isWriteSql } from "../src/sqlConsole.ts";
-import { buildRowChanges, editKey } from "../src/dataGrid.ts";
-import { serializeRows } from "../src/dataTransfer.ts";
-import { compileGroup } from "../src/dbFilter.ts";
+import { executionUnits, splitSqlStatements, isWriteSql } from "../shared/sqlConsole.ts";
+import { buildRowChanges, editKey } from "../shared/dataGrid.ts";
+import { serializeRows } from "../shared/dataTransfer.ts";
+import { compileGroup } from "../shared/dbFilter.ts";
 import { describe, test, expect } from "bun:test";
 import { collectPgKeyMetadata, toPgPlaceholders, readPgSchema, runPgQuery, runPgExec, runPgRowChanges, runPgMigration } from "./pgServer.ts";
-import { DbError } from "../shared.ts";
+import { DbError } from "../shared/types.ts";
 
 describe("toPgPlaceholders", () => {
   test("numbers ? positionally", () => {

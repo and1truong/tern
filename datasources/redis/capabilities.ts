@@ -1,6 +1,6 @@
 // Server metadata → flavor/version/capabilities. Pure: unit-testable, and the
 // UI's feature decisions consume Capabilities rather than product names.
-import type { Capabilities, DataSourceInfo, RedisFlavor } from "../../shared.ts";
+import type { Capabilities, DataSourceInfo, RedisFlavor } from "../../shared/types.ts";
 
 const versionParts = (version: string): [number, number] => {
   const parts = version.split(".").map(Number);

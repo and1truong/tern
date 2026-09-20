@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { dbApi, type RedisSource } from "./dbApi.ts";
-import type { CommandResult, DataSourceInfo, RespValue } from "../shared.ts";
+import type { CommandResult, DataSourceInfo, RespValue } from "../shared/types.ts";
 import { completeCommand, argumentHint } from "../datasources/redis/autocomplete.ts";
 import { explainCommand, type CommandExplanation } from "../datasources/redis/explain.ts";
 import { lintCommand } from "../datasources/redis/lint.ts";

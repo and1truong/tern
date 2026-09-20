@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { binaryByteLength, decodeDbValue, encodeDbValue, isDbBinaryValue, unwrapDbValueForDisplay } from "./binaryValues.ts";
+import { binaryByteLength, decodeDbValue, encodeDbValue, isDbBinaryValue, unwrapDbValueForDisplay } from "./shared/binaryValues.ts";
 
 test("round-trips binary database values through a tagged JSON-safe representation", () => {
   const encoded = encodeDbValue(new Uint8Array([0, 1, 127, 128, 255]));

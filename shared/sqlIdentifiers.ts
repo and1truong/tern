@@ -1,4 +1,4 @@
-import type { DbTable } from "../shared.ts";
+import type { DbTable } from "./types.ts";
 
 export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;

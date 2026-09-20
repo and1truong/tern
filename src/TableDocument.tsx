@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DbSchema, DbTable, QueryResult } from "../shared.ts";
+import type { DbSchema, DbTable, QueryResult } from "../shared/types.ts";
 import { dbApi, type DbSource } from "./dbApi.ts";
 import { DataGrid, StructurePane } from "./DatabaseViews.tsx";
 import { DatabaseFilterBuilder } from "./DatabaseFilterBuilder.tsx";
-import { compileGroup, newGroup, type FilterModel } from "./dbFilter.ts";
-import { orderBySql, paginationSorts, toggleSort, type SortSpec } from "./dataGrid.ts";
-import { tableSql } from "./sqlIdentifiers.ts";
+import { compileGroup, newGroup, type FilterModel } from "../shared/dbFilter.ts";
+import { orderBySql, paginationSorts, toggleSort, type SortSpec } from "../shared/dataGrid.ts";
+import { tableSql } from "../shared/sqlIdentifiers.ts";
 
 export function TableDocument({ table, schema, source, writable, onDirty, onLatency }: {
   table: DbTable; schema: DbSchema; source: DbSource; writable: boolean;

@@ -1,16 +1,16 @@
-import { validateMigrationSql } from "./migrationSafety.ts";
+import { validateMigrationSql } from "../shared/migrationSafety.ts";
 // Postgres counterpart to dbServer.ts for the database views. Mirrors
 // its exported shape (readPgSchema / runPgQuery / runPgExec) so routes.ts can
 // dispatch on source kind. Uses Bun's built-in Postgres client (Bun.SQL); no
 // extra dependency. Connections are opened per request and closed in a finally,
 // matching dbServer.ts's open-on-each-call SQLite pattern — no pool to manage.
 import { SQL } from "bun";
-import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, sqlTokens } from "./sqlSafety.ts";
+import { assertReadOnlyScript, assertReadOnlySql, boundReadSql, sqlTokens } from "../shared/sqlSafety.ts";
 import { awaitControlled, type CancellableQuery } from "./queryControl.ts";
-import { compileRowChanges, toPostgresMutationSql } from "./rowMutations.ts";
-import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared.ts";
-import { DbError } from "../shared.ts";
-import { encodeDbValue } from "../binaryValues.ts";
+import { compileRowChanges, toPostgresMutationSql } from "../shared/rowMutations.ts";
+import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, ConnectionTestResult, DatabaseInsights, MigrationResult } from "../shared/types.ts";
+import { DbError } from "../shared/types.ts";
+import { encodeDbValue } from "../shared/binaryValues.ts";
 
 const DEFAULT_LIMIT = 1000;
 const HARD_LIMIT = 10000;

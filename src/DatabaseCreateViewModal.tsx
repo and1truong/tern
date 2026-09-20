@@ -3,9 +3,9 @@ import { X, Database as DbIcon, Play } from "lucide-react";
 import Notice from "./Notice.tsx";
 import { dbApi } from "./dbApi.ts";
 import type { DbSource } from "./dbApi.ts";
-import type { QueryResult } from "../shared.ts";
-import { unwrapDbValueForDisplay } from "../binaryValues.ts";
-import { firstSqlVerb, isWriteSql, splitSqlStatements } from "./sqlConsole.ts";
+import type { QueryResult } from "../shared/types.ts";
+import { unwrapDbValueForDisplay } from "../shared/binaryValues.ts";
+import { firstSqlVerb, isWriteSql, splitSqlStatements } from "../shared/sqlConsole.ts";
 
 export function validateViewQuery(body: string, dialect: "sqlite" | "postgres"): string {
   const statements = splitSqlStatements(body, dialect);

@@ -1,5 +1,5 @@
-import { DbError } from "../shared.ts";
-import type { QueryResult, ExecResult, MigrationResult, RowMutationResult, DatabaseInsights } from "../shared.ts";
+import { DbError } from "../shared/types.ts";
+import type { QueryResult, ExecResult, MigrationResult, RowMutationResult, DatabaseInsights } from "../shared/types.ts";
 import { runQuery, explainQuery, runExec, runMigration, runRowChanges, readInsights } from "./dbServer.ts";
 
 type Task = { operation: 'query' | 'explain' | 'exec' | 'migration' | 'rows' | 'insights'; args: unknown[] };

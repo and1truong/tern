@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { dbApi, type RedisSource } from "./dbApi.ts";
-import type { DataSourceInfo } from "../shared.ts";
+import type { DataSourceInfo } from "../shared/types.ts";
 
 // Redis-native key browser: incremental SCAN with pattern/type filters, plus
 // rename/delete/expire/persist. Never issues KEYS.

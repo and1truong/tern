@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { dbApi, type DbSource } from "./dbApi.ts";
-import type { ConnectionProfile } from "../shared.ts";
+import type { ConnectionProfile } from "../shared/types.ts";
 import { buildRedisUrl } from "../datasources/redis/connection.ts";
 
 export function DatabaseOpenModal({ onClose, onOpen, initial = 'sqlite' }: {

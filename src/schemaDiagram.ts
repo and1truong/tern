@@ -1,5 +1,5 @@
-import { tableKey } from "./sqlIdentifiers.ts";
-import type { DbSchema, DbTable } from "../shared.ts";
+import { tableKey } from "../shared/sqlIdentifiers.ts";
+import type { DbSchema, DbTable } from "../shared/types.ts";
 
 export interface SchemaRelation {
   fromTable: DbTable;

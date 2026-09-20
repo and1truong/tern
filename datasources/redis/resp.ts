@@ -1,6 +1,6 @@
 // Redis command-line tokenizing and RESP → JSON encoding. Pure, shared by
 // server (console execution) and client (autocomplete/explain/lint parsing).
-import type { RespValue } from "../../shared.ts";
+import type { RespValue } from "../../shared/types.ts";
 
 // Tokenize a command line following redis-cli rules: whitespace separates
 // tokens; "double quotes" support \x hex, \n \r \t \b \a and \\ escapes plus

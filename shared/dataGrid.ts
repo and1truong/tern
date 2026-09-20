@@ -1,7 +1,7 @@
 import { serializeRows } from "./dataTransfer.ts";
 import { quoteIdent } from "./sqlIdentifiers.ts";
-import { encodeDbValue } from "../binaryValues.ts";
-import type { DbTable, RowChange } from "../shared.ts";
+import { encodeDbValue } from "./binaryValues.ts";
+import type { DbTable, RowChange } from "./types.ts";
 
 export type SortDirection = "asc" | "desc";
 export interface SortSpec { column: string; direction: SortDirection }

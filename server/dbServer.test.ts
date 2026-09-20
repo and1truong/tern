@@ -1,11 +1,11 @@
-import { buildRowChanges, editKey } from "../src/dataGrid.ts";
-import { splitSqlStatements, executionUnits } from "../src/sqlConsole.ts";
+import { buildRowChanges, editKey } from "../shared/dataGrid.ts";
+import { splitSqlStatements, executionUnits } from "../shared/sqlConsole.ts";
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { isDbBinaryValue } from "../binaryValues.ts";
+import { isDbBinaryValue } from "../shared/binaryValues.ts";
 import {
   readSchema,
   runQuery,

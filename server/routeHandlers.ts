@@ -2,9 +2,9 @@ import { sqliteTask } from "./sqliteTask.ts";
 import { validateConnectionUrl, type Connections } from "./connections.ts";
 import { createDatabase, readSchema } from "./dbServer.ts";
 import { explainPgQuery, readPgInsights, readPgSchema, runPgMigration, runPgQuery, runPgExec, runPgRowChanges, testPgConnection } from "./pgServer.ts";
-import { compileRowChanges } from "./rowMutations.ts";
-import type { RowChange } from "../shared.ts";
-import { DbError } from "../shared.ts";
+import { compileRowChanges } from "../shared/rowMutations.ts";
+import type { RowChange } from "../shared/types.ts";
+import { DbError } from "../shared/types.ts";
 
 const safeMessage = (message: string) => message.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[PostgreSQL connection]");
 

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { parseCsv, serializeRows } from "./dataTransfer.ts";
-import type { DbTable } from "../shared.ts";
+import type { DbTable } from "./types.ts";
 import { coerceCellValue } from "./dataGrid.ts";
-import { encodeDbValue } from "../binaryValues.ts";
+import { encodeDbValue } from "./binaryValues.ts";
 
 const table: DbTable = { name: "users", schema: "public", type: "table", columns: [], rowCount: -1, ddl: "" };
 

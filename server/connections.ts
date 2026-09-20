@@ -1,7 +1,7 @@
 import { LEGACY_SECRET_SERVICE, withLegacyCredentials } from "./legacyMigration.ts";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import type { ConnectionProfile } from "../shared.ts";
+import type { ConnectionProfile } from "../shared/types.ts";
 import { validateRedisUrl } from "../datasources/redis/connection.ts";
 
 const SECRET_SERVICE = "dev.tern.credentials";

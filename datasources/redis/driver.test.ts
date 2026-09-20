@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { makeRedisDriver, type SessionTransport, type TransportFactory } from "./driver.ts";
-import { DbError } from "../../shared.ts";
+import { DbError } from "../../shared/types.ts";
 
 const INFO_REDIS = [
   "# Server", "redis_version:7.2.4", "tcp_port:6379",
