@@ -119,7 +119,9 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       if (word === "TRIGGER" && leadingWords.length <= 4 && (/^CREATE (?:(?:TEMP|TEMPORARY) )?TRIGGER$/.test(leadingWords.join(" ")) || (dialect === "postgres" && leadingWords.join(" ") === "CREATE OR REPLACE TRIGGER"))) trigger = true;
       if (trigger && dialect === "sqlite" && word === "BEGIN" && ++triggerBegins > 1) throw new Error("Ambiguous trigger BEGIN: quote identifiers named begin before executing this script");
       if (trigger && (word === "BEGIN" || word === "CASE")) bodyDepth++;
-      if (trigger && word === "END") bodyDepth--;
+      // `end` is a keyword-fallback identifier in SQLite (a column can be
+      // named end unquoted) — never let it underflow the body depth.
+      if (trigger && word === "END" && bodyDepth > 0) bodyDepth--;
       continue;
     }
     if (ch === ";" && bodyDepth === 0) {

@@ -83,6 +83,7 @@ export function DatabaseOpenModal({ onClose, onOpen, initial = 'sqlite' }: {
           <div className="form-row"><label>Username<input value={redisUser} onChange={e => setRedisUser(e.target.value)} placeholder="default" autoComplete="username" /></label><label>Password<input type="password" value={redisPassword} onChange={e => setRedisPassword(e.target.value)} autoComplete="new-password" /></label></div>
           <div className="form-row"><label>Logical database<input required type="number" min="0" max="15" value={redisDb} onChange={e => setRedisDb(e.target.value)} /></label><label>Environment<select value={environment} onChange={e => setEnvironment(e.target.value as typeof environment)}>{['local', 'development', 'staging', 'production'].map(v => <option key={v}>{v}</option>)}</select></label></div>
           <label className="check"><input type="checkbox" checked={redisTls} onChange={e => setRedisTls(e.target.checked)} />Use TLS (rediss://)</label>
+          {redisUser && !redisPassword && <p className="text-xs text-[var(--faint)]">A username without a password has no effect — AUTH always sends both.</p>}
           <label className="check"><input type="checkbox" checked={readOnly} onChange={e => setReadOnly(e.target.checked)} />Default to read-only</label>
           <p>Connects to Redis and Valkey servers. Passwords are stored in your OS credential manager through Bun.secrets.</p>
         </> : <>

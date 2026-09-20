@@ -36,7 +36,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const runPreview = async () => {
     setBusy(true); setErr(null);
     try {
-      setPreview(await dbApi.query(source, validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres"), [], 100));
+      setPreview(await dbApi.query(source, validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres"), [], 100, 0, AbortSignal.timeout(35_000)));
     } catch (e) { setPreview(null); setErr(String(e)); }
     finally { setBusy(false); }
   };
@@ -44,7 +44,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
   const create = async () => {
     setBusy(true); setErr(null);
     try {
-      await dbApi.exec(source, createDdl(validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres")), true);
+      await dbApi.exec(source, createDdl(validateViewQuery(body, source.kind === "sqlite" ? "sqlite" : "postgres")), true, AbortSignal.timeout(35_000));
       onCreated();
       onClose();
     } catch (e) { setErr(String(e)); }

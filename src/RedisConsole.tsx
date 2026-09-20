@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
+import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { dbApi, type RedisSource } from "./dbApi.ts";
 import type { CommandResult, DataSourceInfo, RespValue } from "../shared/types.ts";
@@ -71,17 +72,28 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveVersion = useRef(0);
   const keyFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keyFetchAbort = useRef<AbortController | null>(null);
   const runAbort = useRef<AbortController | null>(null);
+  const editorView = useRef<EditorView | null>(null);
+  const [cursorLine, setCursorLine] = useState(1);
+  const [cursorCol, setCursorCol] = useState(0);
   const latest = useRef(consoleState);
   latest.current = consoleState;
 
   useEffect(() => {
     dbApi.state.get<SavedConsole>(storageKey).then(value => {
-      if (isSavedConsole(value)) setConsole(boundConsoleHistory(value));
-      setReady(true);
-    }).catch(e => setError(String(e)));
+      // Only the top-level shape is guaranteed — drop entries whose fields
+      // aren't the expected types rather than letting them throw in stash().
+      if (isSavedConsole(value)) setConsole(boundConsoleHistory({
+        input: value.input,
+        history: value.history.filter(h => h && typeof h.command === 'string' && typeof h.at === 'number'),
+        favorites: value.favorites.filter(f => typeof f === 'string'),
+      }));
+    }).catch(e => setError(String(e))).finally(() => setReady(true));
   }, [storageKey]);
   useEffect(() => () => {
+    runAbort.current?.abort();
+    keyFetchAbort.current?.abort();
     if (saveTimer.current) { clearTimeout(saveTimer.current); void dbApi.state.set(storageKey, stash(latest.current)).catch(() => {}); }
     if (keyFetchTimer.current) clearTimeout(keyFetchTimer.current);
   }, [storageKey]);
@@ -102,21 +114,37 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
     onDirty(true);
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
-      void dbApi.state.set(storageKey, stash(next)).then(() => { if (version === saveVersion.current) onDirty(false); }).catch(e => setError(String(e)));
+      // A failed save must not wedge the doc dirty forever — surface the
+      // error and clear dirty so the document can still be closed.
+      void dbApi.state.set(storageKey, stash(next))
+        .catch(e => setError(String(e)))
+        .finally(() => { if (version === saveVersion.current) onDirty(false); });
     }, 250);
   };
 
-  const update = (input: string) => {
-    persist({ ...consoleState, input });
-    setSuggestions(completeCommand(input, { keys: knownKeys }));
+  const update = (input: string, view: ViewUpdate) => {
+    // Commands are per-line; suggestions and hints describe the text before
+    // the cursor, not the whole line.
+    const line = view.state.doc.lineAt(view.state.selection.main.head);
+    const col = view.state.selection.main.head - line.from;
+    setCursorLine(line.number);
+    setCursorCol(col);
+    const activeLine = line.text.slice(0, col);
+    // A programmatic setConsole (restore, history/favorite clicks already
+    // persisted) echoes through onChange — skip the redundant save so a
+    // restored doc doesn't come up dirty.
+    if (input !== latest.current.input) persist({ ...latest.current, input });
+    setSuggestions(completeCommand(activeLine, { keys: knownKeys }));
     // Refresh key-name suggestions only while completing a key argument —
     // scanning for command-name prefixes is wasted work.
     if (keyFetchTimer.current) clearTimeout(keyFetchTimer.current);
-    if (expectsKeyArg(input)) {
+    if (expectsKeyArg(activeLine)) {
       keyFetchTimer.current = setTimeout(async () => {
+        keyFetchAbort.current?.abort();
+        const controller = new AbortController();
+        keyFetchAbort.current = controller;
         try {
-          const prefix = input.trim().split(/\s+/).pop() ?? "";
-          const page = await dbApi.datasource.scan(source, { cursor: "0", match: `${prefix.replace(/[\\*?\[\]]/g, "\\$&")}*`, count: 20 });
+          const page = await dbApi.datasource.scan(source, { cursor: "0", match: `${partialToken(activeLine).replace(/[\\*?\[\]]/g, "\\$&")}*`, count: 20 }, controller.signal);
           setKnownKeys(page.keys.map(k => k.key));
         } catch { /* suggestions are best-effort */ }
       }, 300);
@@ -131,7 +159,7 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
     runAbort.current = controller;
     setBusy(true); setError(''); setOutputs([]); setSuggestions([]);
     const entries: OutputEntry[] = [];
-    let next = consoleState;
+    const ran: string[] = [];
     for (const command of lines) {
       const entry: OutputEntry = { command, at: Date.now() };
       try {
@@ -142,36 +170,51 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
       entries.push(entry);
       setOutputs([...entries]);
       if (entry.error || entry.result?.reply.t === "err") break;
-      next = { ...next, history: [{ command, at: Date.now() }, ...next.history.filter(h => h.command !== command)].slice(0, 100) };
+      ran.push(command);
     }
     runAbort.current = null;
-    persist(next);
+    // History merges into the LATEST state — favorites/history edits (e.g.
+    // clearing history) made while the run was in flight must not be
+    // resurrected by the snapshot captured when it started.
+    const ranUnique = [...new Set(ran)];
+    persist({
+      ...latest.current,
+      history: [...ranUnique.map(command => ({ command, at: Date.now() })), ...latest.current.history.filter(h => !ranUnique.includes(h.command))].slice(0, 100),
+    });
     setBusy(false);
   };
 
   const insertSuggestion = (insert: string) => {
-    // Replace the trailing partial token with the accepted completion; when
-    // the partial sits inside an open quote, drop the dangling fragment too.
-    let base = consoleState.input.replace(/\S*$/, "");
-    const unclosed = (q: '"' | "'") => {
-      const body = q === '"' ? base.replace(/\\./g, "") : base;
-      return (body.split(q).length - 1) % 2 === 1;
-    };
-    if (unclosed('"')) base = base.replace(/"[^"]*$/, "");
-    else if (unclosed("'")) base = base.replace(/'[^']*$/, "");
-    persist({ ...consoleState, input: base + insert });
+    // Replace the partial token ending at the cursor; when the partial sits
+    // inside an open quote, drop the dangling fragment too. Text after the
+    // cursor is preserved.
+    const lines = consoleState.input.split("\n");
+    const i = Math.min(cursorLine - 1, lines.length - 1);
+    const suffix = lines[i]!.slice(cursorCol);
+    let base = lines[i]!.slice(0, cursorCol).replace(/\S*$/, "");
+    if (unclosedQuote(base, '"')) base = base.replace(/"[^"]*$/, "");
+    else if (unclosedQuote(base, "'")) base = base.replace(/'[^']*$/, "");
+    lines[i] = base + insert + suffix;
+    persist({ ...consoleState, input: lines.join("\n") });
     setSuggestions([]);
+    // Focus stays on the editor so the user can keep typing after the click.
+    editorView.current?.focus();
   };
 
-  const hint = argumentHint(consoleState.input);
-  const warnings = info ? lintCommand(consoleState.input, { writable, cluster: info.capabilities?.cluster === true }) : [];
+  const activeLine = (consoleState.input.split("\n")[cursorLine - 1] ?? "").slice(0, cursorCol);
+  const hint = argumentHint(activeLine);
+  // Each line is its own command — lint them independently so "PING\nPING"
+  // doesn't parse as one arity-violating command.
+  const warnings = info ? consoleState.input.split("\n").map(l => l.trim()).filter(Boolean)
+    .flatMap(l => lintCommand(l, { writable, cluster: info.capabilities?.cluster === true })) : [];
   const explanation: CommandExplanation | null = explainOpen && info
-    ? explainCommand(consoleState.input, { cluster: info.capabilities?.cluster === true })
+    ? explainCommand(activeLine, { cluster: info.capabilities?.cluster === true })
     : null;
   const flavorLabel = info ? (info.flavor === "valkey" ? "Valkey" : "Redis") : "Redis";
 
   return <div className="flex-1 min-h-0 flex flex-col" onKeyDown={e => {
     if (!busy && ready && (e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void run(); }
+    if (e.key === "Escape" && suggestions.length) setSuggestions([]);
   }}>
     <div className="toolbar flex-wrap">
       <span>{flavorLabel} · {writable ? "Writable" : "Read Only"} · db {source.database}</span>
@@ -189,7 +232,20 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
         </div>}
         <div className="px-2 pt-1 text-xs text-[var(--text-muted)]">{hint.hint}</div>
         <div className="px-2">
-          <CodeMirror value={consoleState.input} onChange={update} theme={oneDark} editable={ready && !busy}
+          <CodeMirror value={consoleState.input} onChange={update}
+            onCreateEditor={view => { editorView.current = view; }}
+            onUpdate={u => {
+              const line = u.state.doc.lineAt(u.state.selection.main.head);
+              const col = u.state.selection.main.head - line.from;
+              if (line.number !== cursorLine || col !== cursorCol) {
+                setCursorLine(line.number);
+                setCursorCol(col);
+                // Suggestions describe the text under the cursor — recompute
+                // them on moves so a stale list can't insert at this position.
+                setSuggestions(completeCommand(line.text.slice(0, col), { keys: knownKeys }));
+              }
+            }}
+            theme={oneDark} editable={ready && !busy}
             basicSetup={{ lineNumbers: true, foldGutter: false, autocompletion: false, highlightActiveLine: false }}
             placeholder="Type a Redis command… ⌘/Ctrl+Enter runs it"
             className="border border-[var(--border)] max-h-40 overflow-auto" />
@@ -222,15 +278,42 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
         {explanation.dangers.length > 0 && <ul className="text-[var(--danger)] space-y-1">{explanation.dangers.map((d, i) => <li key={i}>{d}</li>)}</ul>}
         {explanation.risks.length > 0 && <ul className="space-y-1 text-[var(--warning)]">{explanation.risks.map((r, i) => <li key={i}>{r}</li>)}</ul>}
         {explanation.cluster.length > 0 && <ul className="space-y-1 text-[var(--text-muted)]">{explanation.cluster.map((c, i) => <li key={i}>{c}</li>)}</ul>}
-        {consoleState.favorites.length > 0 && <div><b>Favorites</b><ul className="mt-1 space-y-1">{consoleState.favorites.map(f => <li key={f}><button className="text-left w-full truncate hover:underline" onClick={() => persist({ ...consoleState, input: f })}>★ {f}</button></li>)}</ul></div>}
+        {consoleState.favorites.length > 0 && <div><b>Favorites</b><ul className="mt-1 space-y-1">{consoleState.favorites.map(f => <li key={f}><button className="text-left w-full truncate hover:underline" onClick={() => { setSuggestions([]); persist({ ...consoleState, input: f }); }}>★ {f}</button></li>)}</ul></div>}
       </aside>}
       {historyOpen && <aside className="w-80 border-l border-[var(--border)] p-3 overflow-auto text-xs">
         <div className="flex"><b>Command history</b><button className="ml-auto text-[10px] text-[var(--muted)]" onClick={() => persist({ ...consoleState, history: [] })}>Clear</button></div>
-        {consoleState.history.map((entry, i) => <button key={i} className="block w-full text-left py-1 border-b border-[var(--border)] truncate hover:bg-[var(--hover)]" onClick={() => persist({ ...consoleState, input: entry.command })}>
+        {consoleState.history.map((entry, i) => <button key={i} className="block w-full text-left py-1 border-b border-[var(--border)] truncate hover:bg-[var(--hover)]" onClick={() => { setSuggestions([]); persist({ ...consoleState, input: entry.command }); }}>
           {entry.command}
         </button>)}
         {!consoleState.history.length && <p className="text-[var(--faint)]">No commands yet.</p>}
       </aside>}
     </div>
   </div>;
+}
+
+// Does `text` end inside an unterminated quote? Double quotes consume the
+// char after any backslash; single quotes escape only via \' (matching
+// sdssplitargs — '\\' inside single quotes is a literal backslash).
+function unclosedQuote(text: string, q: '"' | "'"): boolean {
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && (q === '"' || text[i + 1] === "'")) { i++; continue; }
+    if (ch === q) open = !open;
+  }
+  return open;
+}
+
+// The partial argument being typed at the end of a line: empty on trailing
+// whitespace, the unquoted tail otherwise, and the content after an
+// unterminated quote when one is open.
+function partialToken(line: string): string {
+  if (!line || /\s$/.test(line)) return "";
+  if (unclosedQuote(line, '"')) return line.slice(line.lastIndexOf('"') + 1);
+  if (unclosedQuote(line, "'")) return line.slice(line.lastIndexOf("'") + 1);
+  const tail = line.match(/\S*$/)?.[0] ?? "";
+  // A balanced quoted token still carries its delimiters — strip them.
+  return tail.length > 1 && ((tail.startsWith('"') && tail.endsWith('"')) || (tail.startsWith("'") && tail.endsWith("'")))
+    ? tail.slice(1, -1)
+    : tail;
 }

@@ -39,7 +39,7 @@ export function makePostgresDriver(): DataSourceDriver {
         query: (q, signal) => runPgQuery(url, q.sql, q.params ?? [], q.limit, q.offset, signal, q.timeoutMs, q.exportAll === true),
         explain: (q, signal) => explainPgQuery(url, q.sql, q.params ?? [], signal, q.timeoutMs),
         exec: (sql, writable, signal, timeoutMs) => runPgExec(url, sql, signal, timeoutMs, !writable),
-        migrate: (sql, apply, _signal, timeoutMs) => runPgMigration(url, sql, apply, timeoutMs),
+        migrate: (sql, apply, signal, timeoutMs) => runPgMigration(url, sql, apply, timeoutMs, signal),
         applyRows: (changes, signal, timeoutMs) => runPgRowChanges(url, changes, signal, timeoutMs),
       };
       return {

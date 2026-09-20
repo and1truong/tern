@@ -29,7 +29,7 @@ export async function runPgQuery(
   timeoutRaw?: number,
   exportAll = false,
 ): Promise<QueryResult> {
-  const limit = exportAll ? 100_000 : Math.min(Math.max(limitRaw ?? DEFAULT_LIMIT, 1), HARD_LIMIT);
+  const limit = exportAll ? 100_000 : Math.min(Math.max(Math.floor(limitRaw ?? DEFAULT_LIMIT), 1), HARD_LIMIT);
   const offset = exportAll ? 0 : Math.max(Math.floor(offsetRaw ?? 0), 0);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const boundedSql = boundReadSql(sql, limit, offset);
@@ -45,10 +45,14 @@ export async function runPgQuery(
     const explain = sqlTokens(boundedSql)[0] === "EXPLAIN";
     // Bun values() preserves native values but exposes no column names. Carry
     // labels alongside positional values; json_object_keys retains duplicate keys.
-    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json((SELECT "__tern_shape" FROM (SELECT "__tern_result".*) AS "__tern_shape")))), "__tern_result".* FROM (VALUES (1)) AS "__tern_seed" LEFT JOIN LATERAL (SELECT TRUE AS "__tern_present", "__tern_rows".* FROM (${boundedSql}) AS "__tern_rows") AS "__tern_result" ON TRUE`;
+    // The bare composite identifier would collide with a user column of the
+    // same name (Postgres resolves the column first) — pick an unguessable
+    // alias per query.
+    const shape = `__tern_shape_${crypto.randomUUID().replaceAll("-", "")}`;
+    const positionalSql = explain ? boundedSql : `SELECT ARRAY(SELECT json_object_keys(row_to_json((SELECT "${shape}" FROM (SELECT "__tern_result".*) AS "${shape}")))), "__tern_result".* FROM (VALUES (1)) AS "__tern_seed" LEFT JOIN LATERAL (SELECT TRUE AS "__tern_present", "__tern_rows".* FROM (${boundedSql}) AS "__tern_rows") AS "__tern_result" ON TRUE`;
     try {
       if (sqlTokens(boundedSql)[0] === "SHOW") {
-        const result = await controlledPg(url, connection, connection.unsafe(boundedSql, params), signal, timeoutMs) as Record<string, unknown>[];
+        const result = await controlledPg(url, connection, () => connection.unsafe(boundedSql, params), signal, timeoutMs) as Record<string, unknown>[];
         return {
           columns: Object.keys(result[0] ?? {}),
           rows: result.slice(offset, offset + limit),
@@ -56,8 +60,7 @@ export async function runPgQuery(
           hasMore: result.length > offset + limit, offset,
         };
       }
-      const query = connection.unsafe(toPgPlaceholders(positionalSql, params.length), params).values();
-      rows = await controlledPg(url, connection, query, signal, timeoutMs) as unknown[][];
+      rows = await controlledPg(url, connection, () => connection.unsafe(toPgPlaceholders(positionalSql, params.length), params).values(), signal, timeoutMs) as unknown[][];
     } catch (e) {
       if (e instanceof DbError) throw e;
       throw new DbError("sql", e instanceof Error ? e.message : String(e));
@@ -103,7 +106,7 @@ export async function explainPgQuery(
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
     const t0 = performance.now();
     const result = await controlledPg(url, connection,
-      connection.unsafe(`EXPLAIN (FORMAT JSON, ANALYZE FALSE, COSTS TRUE) ${toPgPlaceholders(normalized, params.length)}`, params),
+      () => connection.unsafe(`EXPLAIN (FORMAT JSON, ANALYZE FALSE, COSTS TRUE) ${toPgPlaceholders(normalized, params.length)}`, params),
       signal,
       timeoutMs,
     ) as Record<string, unknown>[];
@@ -119,17 +122,21 @@ export async function explainPgQuery(
   }
 }
 
-export async function runPgExec(url: string, sql: string, signal?: AbortSignal, timeoutMs = 30_000, readOnly = false): Promise<ExecResult> {
+export async function runPgExec(url: string, sql: string, signal?: AbortSignal, timeoutRaw = 30_000, readOnly = false): Promise<ExecResult> {
   if (readOnly) assertReadOnlyScript(sql);
+  const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
   const connection = await db.reserve();
   try {
     if (readOnly) await connection.unsafe("SET default_transaction_read_only = on");
+    // Server-side backstop — a failed cancel-control connection must not
+    // leave the exec running on the pooled socket indefinitely.
+    await connection.unsafe(`SET statement_timeout = ${timeoutMs}`);
     const t0 = performance.now();
     let rowsAffected = 0;
     let result: QueryResult | undefined;
     try {
-      const rows = await controlledPg(url, connection, connection.unsafe(sql).values(), signal, timeoutMs) as unknown[][];
+      const rows = await controlledPg(url, connection, () => connection.unsafe(sql).values(), signal, timeoutMs) as unknown[][];
       rowsAffected = affectedOf(rows);
       if (rows.length > 0 || sqlTokens(sql)[0] === "EXPLAIN") {
         // Bun values() retains duplicate labels' values but exposes no column metadata.
@@ -137,6 +144,7 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
         result = { columns, rows: rows.map(row => Object.fromEntries(columns.map((column, index) => [column, encodeDbValue(row[index])]))), ms: 0, hasMore: false, offset: 0 };
       }
     } catch (e) {
+      if (e instanceof DbError) throw e;
       throw new DbError("sql", e instanceof Error ? e.message : String(e));
     }
     const ms = Math.round((performance.now() - t0) * 10) / 10;
@@ -148,7 +156,7 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
   }
 }
 
-export async function runPgMigration(url: string, sql: string, apply: boolean, timeoutRaw?: number): Promise<MigrationResult> {
+export async function runPgMigration(url: string, sql: string, apply: boolean, timeoutRaw?: number, signal?: AbortSignal): Promise<MigrationResult> {
   const script = validateMigrationSql(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
@@ -159,7 +167,7 @@ export async function runPgMigration(url: string, sql: string, apply: boolean, t
     await connection.unsafe("BEGIN");
     transaction = true;
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
-    await connection.unsafe(script);
+    await controlledPg(url, connection, () => connection.unsafe(script), signal, timeoutMs);
     await connection.unsafe(apply ? "COMMIT" : "ROLLBACK");
     transaction = false;
     return { validated: true, applied: apply, ms: Math.round((performance.now() - t0) * 10) / 10 };
@@ -178,7 +186,7 @@ export async function testPgConnection(url: string, signal?: AbortSignal): Promi
   const connection = await db.reserve();
   const t0 = performance.now();
   try {
-    const rows = await controlledPg(url, connection, connection.unsafe(
+    const rows = await controlledPg(url, connection, () => connection.unsafe(
       `SELECT current_database() AS database, current_user AS "user",
               current_setting('server_version') AS server_version`,
     ), signal, 10_000) as Record<string, unknown>[];
@@ -202,8 +210,9 @@ export async function runPgRowChanges(
   url: string,
   changes: RowChange[],
   signal?: AbortSignal,
-  timeoutMs = 30_000,
+  timeoutRaw = 30_000,
 ): Promise<RowMutationResult> {
+  const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const statements = compileRowChanges(changes);
   const db = await open(url);
   const connection = await db.reserve();
@@ -218,7 +227,7 @@ export async function runPgRowChanges(
       let rows: unknown[];
       try {
         rows = await controlledPg(url, connection,
-          connection.unsafe(toPostgresMutationSql(statement.sql), statement.params),
+          () => connection.unsafe(toPostgresMutationSql(statement.sql), statement.params),
           signal,
           timeoutMs,
         ) as unknown[];

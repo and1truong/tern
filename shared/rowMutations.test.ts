@@ -20,6 +20,15 @@ describe("structured row mutations", () => {
     );
   });
 
+  test("prototype-named expected columns are not silently dropped", () => {
+    const statement = compileRowChange({
+      kind: "update", table: { name: "t" },
+      key: { id: 1 }, expected: { constructor: "x" }, values: { v: 2 },
+    });
+    expect(statement.sql).toBe(`UPDATE "t" SET "v" = ? WHERE "id" IS ? AND "constructor" IS ?`);
+    expect(statement.params).toEqual([2, 1, "x"]);
+  });
+
   test("compiles inserts and deletes without interpolating values", () => {
     expect(compileRowChange({
       kind: "insert", table: { name: "users" }, values: { name: `O'Reilly`, active: true },

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { completeCommand, argumentHint } from "./autocomplete.ts";
+import { completeCommand, argumentHint, expectsKeyArg, specForPosition } from "./autocomplete.ts";
+import { lookupCommand } from "./catalog.ts";
 
 const keys = ["user:1", "user:2", "session:a"];
 
@@ -42,6 +43,9 @@ describe("completeCommand — arguments", () => {
     expect(labels).toEqual(expect.arrayContaining(["REV", "WITHSCORES", "BYSCORE", "BYLEX", "LIMIT"]));
     const set = completeCommand("SET k v EX 10 ").map(i => i.label);
     expect(set).toEqual(expect.arrayContaining(["NX", "XX", "GET", "KEEPTTL"]));
+    // An optional non-enum spec (SET's seconds) must not hide later flags.
+    const beforeExpiry = completeCommand("SET k v ").map(i => i.label);
+    expect(beforeExpiry).toEqual(expect.arrayContaining(["EX", "NX", "KEEPTTL"]));
   });
   test("unknown commands produce no argument completions", () => {
     expect(completeCommand("FAKE ")).toEqual([]);
@@ -50,6 +54,42 @@ describe("completeCommand — arguments", () => {
     const labels = completeCommand('GET "unterminated', { keys }).map(i => i.label);
     expect(Array.isArray(labels)).toBe(true);
     expect(completeCommand("GET se", { keys }).map(i => i.label)).toEqual(["session:a"]);
+  });
+  test("keys with spaces or quotes insert quoted so they stay one argument", () => {
+    const spaced = completeCommand("GET ", { keys: ["weird key", 'quo"ted', "plain"] });
+    const byLabel = Object.fromEntries(spaced.map(i => [i.label, i.insert]));
+    expect(byLabel["weird key"]).toBe('"weird key"');
+    expect(byLabel['quo"ted']).toBe('"quo\\"ted"');
+    expect(byLabel["plain"]).toBe("plain");
+  });
+});
+
+describe("expectsKeyArg / specForPosition", () => {
+  test("expectsKeyArg only fires while typing a key argument", () => {
+    expect(expectsKeyArg("GET ")).toBe(true);
+    expect(expectsKeyArg("GET k")).toBe(true);
+    expect(expectsKeyArg("SET k ")).toBe(false);   // value position
+    expect(expectsKeyArg("GET")).toBe(false);      // command-name position
+    expect(expectsKeyArg("FAKE ")).toBe(false);
+  });
+  test("key positions resolve through argRoles, not just spec index", () => {
+    // MSET interleaves key/value pairs — even positions are keys.
+    expect(expectsKeyArg("MSET ")).toBe(true);
+    expect(expectsKeyArg("MSET a ")).toBe(false);
+    expect(expectsKeyArg("MSET a 1 ")).toBe(true);
+    // EVAL's numkeys bounds the key list; argv positions are not keys.
+    expect(expectsKeyArg("EVAL s 1 ")).toBe(true);
+    expect(expectsKeyArg("EVAL s 1 k ")).toBe(false);
+    // XREAD keys sit in the first half after STREAMS.
+    expect(expectsKeyArg("XREAD STREAMS ")).toBe(true);
+  });
+  test("specForPosition returns null past a fixed arity", () => {
+    const get = lookupCommand("GET")!;
+    expect(specForPosition(get, 0)?.name).toBe("key");
+    expect(specForPosition(get, 1)).toBeNull();
+    // Variadic tails keep their spec forever.
+    const del = lookupCommand("DEL")!;
+    expect(specForPosition(del, 5)?.name).toBe("key");
   });
 });
 

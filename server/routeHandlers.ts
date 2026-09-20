@@ -10,6 +10,7 @@ const safeMessage = (message: string) => message
 export const dbErrorResponse = (e: unknown): Response => {
   if (e instanceof DbError) {
     const status = e.code === "not_found" ? 404
+      : e.code === "not_read_only" ? 403
       : e.code === "timeout" || e.code === "cancelled" ? 408
       : e.code === "conflict" ? 409
       : 400;
@@ -22,16 +23,19 @@ export const dbErrorResponse = (e: unknown): Response => {
 // endpoints route through datasources/router.ts.
 export function makeHandlers(conns: Connections, hooks?: {
   onConnectionDeleted?: (id: string) => Promise<void>;   // lets the datasource layer drop cached sessions
+  onConnectionSaved?: (id: string) => Promise<void>;     // an overwrite must not keep sessions on stale credentials
 }) {
   const environments = new Set(["local", "development", "staging", "production"]);
 
-  // Strip the password from a connection url for display, keeping host/db visible.
+  // Strip the password from a connection url for display, keeping host/db
+  // visible. Fail closed: an unparseable stored url is credential-suspect and
+  // must not reach the client verbatim.
   const redactUrl = (url: string): string => {
     try {
       const u = new URL(url);
       if (u.password) u.password = "***";
       return u.toString();
-    } catch { return url; }
+    } catch { return "(invalid url)"; }
   };
 
   return {
@@ -61,6 +65,7 @@ export function makeHandlers(conns: Connections, hooks?: {
       try {
         const saved = await conns.save(b.driver ?? "postgres", label, url, { environment, readOnly: b.readOnly !== false });
         conns.touch(saved.id);
+        await hooks?.onConnectionSaved?.(saved.id);
         return Response.json({ ...saved, url: redactUrl(saved.url) });
       } catch (e) { return dbErrorResponse(e); }
     },

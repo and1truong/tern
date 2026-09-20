@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, linkSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { SecretStore } from "./connections.ts";
@@ -14,31 +14,67 @@ export function migrateAppDatabase(source: string, destination: string): void {
   if (existsSync(destination) || !existsSync(source)) return;
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   const temporary = `${destination}.${crypto.randomUUID()}.migration`;
-  const legacy = new Database(source, { readonly: true });
+  // A corrupt or non-SQLite legacy file must not brick startup — the
+  // migration is a convenience, not a gate.
+  let legacy: Database | null = null;
+  let serialized: Uint8Array;
+  try { legacy = new Database(source, { readonly: true }); serialized = legacy.serialize(); }
+  catch (error) {
+    legacy?.close();
+    console.warn(`Skipping legacy database migration: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
   try {
     // SQLite serialization includes committed WAL pages; copying the file alone does not.
-    writeFileSync(temporary, legacy.serialize(), { flag: "wx", mode: 0o600 });
+    writeFileSync(temporary, serialized, { flag: "wx", mode: 0o600 });
     try { linkSync(temporary, destination); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EXDEV") {
+        // Cross-device destination: copy then rename inside the target
+        // filesystem to keep the publish atomic.
+        const staged = `${destination}.${crypto.randomUUID()}.staging`;
+        try {
+          copyFileSync(temporary, staged);
+          renameSync(staged, destination);
+        } finally {
+          if (existsSync(staged)) unlinkSync(staged);
+        }
+      } else if (code !== "EEXIST") throw error;
+    }
   } finally {
-    legacy.close();
+    legacy!.close();
     if (existsSync(temporary)) unlinkSync(temporary);
   }
 }
 
 export function withLegacyCredentials(current: SecretStore, legacy: SecretStore): SecretStore {
+  // The keychain has no CAS — serialize operations per name so the get()
+  // copy-back can't clobber a concurrent set() with the stale legacy value
+  // (and a set can't slip between the double-check and the copy-back).
+  const pending = new Map<string, Promise<unknown>>();
+  const enqueue = <T>(name: string, op: () => Promise<T>): Promise<T> => {
+    const run = (pending.get(name) ?? Promise.resolve()).catch(() => {}).then(op);
+    pending.set(name, run);
+    void run.finally(() => { if (pending.get(name) === run) pending.delete(name); });
+    return run;
+  };
   return {
     ...current,
-    async get(name) {
+    get: (name) => enqueue(name, async () => {
       const present = await current.get(name);
       if (present !== null) return present;
       const old = await legacy.get(name);
       if (old === null) return null;
       const newer = await current.get(name);
       if (newer !== null) return newer;
-      await current.set(name, old);
+      // The copy-back is a convenience, not a gate: when the new store refuses
+      // the write the credential is still valid and retries next time.
+      try { await current.set(name, old); } catch { /* legacy stays readable */ }
       // Leave the old credential available to the untouched legacy database.
       return old;
-    },
+    }),
+    set: (name, value) => enqueue(name, () => current.set(name, value)),
+    delete: (name) => enqueue(name, () => current.delete(name)),
   };
 }

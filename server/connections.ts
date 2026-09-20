@@ -47,7 +47,9 @@ function sanitizedUrl(url: string): string {
     const parsed = new URL(url);
     parsed.password = "";
     return parsed.toString();
-  } catch { return url; }
+    // Fail closed: returning the raw string could hand a credential-bearing
+    // URL straight back to the client.
+  } catch { return ""; }
 }
 
 function hasPassword(url: string): boolean {
@@ -98,16 +100,34 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       if (!hasPassword(found.url)) return found.url;
 
       // Lazy migration for v1 rows: persist securely before scrubbing SQLite.
-      const secretName = `connection:${found.id}`;
-      const existing = await secrets.get(secretName);
+      // The UPDATE is conditional on the row being unchanged — a concurrent
+      // delete/save must not be overwritten by this migration.
+      // A credential already stored under connection:<id> wins — a save()
+      // that wrote the secret but crashed before the upsert must not be
+      // reverted by this stale plaintext row. Otherwise the migration
+      // writes under a unique name: it can never collide with a racing
+      // save()'s connection:<id> write, and a lost race leaves an
+      // unreferenced name that is always safe to delete.
+      const conventional = `connection:${found.id}`;
+      const existing = await secrets.get(conventional);
+      let secretName = conventional;
       const migratedUrl = existing ?? found.url;
-      if (existing === null) await secrets.set(secretName, migratedUrl);
-      db.query("UPDATE datasource_connections SET url = ?, secret_name = ? WHERE id = ?")
-        .run(sanitizedUrl(migratedUrl), secretName, found.id);
+      if (existing === null) {
+        secretName = `connection:${found.id}:${randomUUID()}`;
+        await secrets.set(secretName, migratedUrl);
+      }
+      const migrated = db.query("UPDATE datasource_connections SET url = ?, secret_name = ? WHERE id = ? AND url = ?")
+        .run(sanitizedUrl(migratedUrl), secretName, found.id, found.url).changes;
+      if (migrated === 0) {
+        if (existing === null) await secrets.delete(secretName).catch(() => false);
+        return api.resolveUrl(id);
+      }
       return migratedUrl;
     },
     save: async (driver, label, url, options = {}) => {
-      const validate = validators[driver];
+      // Own-property lookup: `validators[driver]` would resolve Object
+      // prototype members ("constructor", …) as validators and skip checks.
+      const validate = Object.hasOwn(validators, driver) ? validators[driver] : undefined;
       if (!validate) throw new Error(`Unknown driver "${driver}"`);
       validate(url);
       const id = options.id ?? randomUUID();
@@ -116,21 +136,32 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       const secretName = `connection:${id}`;
       const secret = hasPassword(url) ? secretName : null;
       // Capture the prior credential so a failed upsert cannot orphan the
-      // surviving row's secret.
+      // surviving row's secret — whatever name the row references, not just
+      // the conventional `connection:<id>`.
       const prior = options.id !== undefined ? row(options.id) : null;
-      const priorSecret = prior?.secret_name === secretName ? await secrets.get(secretName) : null;
+      const priorSecret = prior?.secret_name ? await secrets.get(prior.secret_name) : null;
       if (secret) await secrets.set(secret, url);
-      else await secrets.delete(secretName).catch(() => false);
+      // Removing a credential: a failed delete must abort the save — the row
+      // keeps its secret_name and the credential stays referenced, instead of
+      // orphaning an unreferenced secret in the keychain.
+      else if (prior?.secret_name) await secrets.delete(prior.secret_name);
       try {
         db.query(
           "INSERT INTO datasource_connections (id, label, driver, url, secret_name, environment, read_only) VALUES (?, ?, ?, ?, ?, ?, ?) " +
             "ON CONFLICT(id) DO UPDATE SET label = excluded.label, driver = excluded.driver, url = excluded.url, secret_name = excluded.secret_name, environment = excluded.environment, read_only = excluded.read_only",
         ).run(id, label, driver, sanitizedUrl(url), secret, environment, readOnly ? 1 : 0);
       } catch (error) {
-        if (priorSecret !== null) await secrets.set(secretName, priorSecret).catch(() => {});
-        else if (secret) await secrets.delete(secret).catch(() => false);
+        // Roll back whichever pre-write steps ran: restore the prior secret
+        // under the name the row references, and drop a newly-written secret
+        // that wasn't merely overwritten.
+        if (prior?.secret_name && priorSecret !== null) await secrets.set(prior.secret_name, priorSecret).catch(() => {});
+        if (secret && (prior?.secret_name !== secretName || priorSecret === null)) await secrets.delete(secret).catch(() => false);
         throw error;
       }
+      // A prior row pointing at a non-conventional secret_name (hand-edited
+      // DB) would orphan that credential once the upsert repoints it — clean
+      // up post-commit so a failed delete can't brick the save.
+      if (prior?.secret_name && prior.secret_name !== secretName) await secrets.delete(prior.secret_name).catch(() => false);
       const saved = await api.get(id);
       if (!saved) throw new Error("save failed");
       return saved;

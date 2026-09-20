@@ -8,6 +8,14 @@ export const READ_PRAGMAS = new Set([
   "PAGE_SIZE", "PRAGMA_LIST", "QUICK_CHECK", "SCHEMA_VERSION", "SYNCHRONOUS", "TABLE_INFO",
   "TABLE_LIST", "TABLE_XINFO", "USER_VERSION",
 ]);
+// Read-only pragmas that legitimately take a function-style argument —
+// PRAGMA table_info(t). Every other approved pragma is a bare read, so
+// PRAGMA x(y) is the SET form and must be refused (user_version(123) writes
+// the database header; the `=` check alone misses it).
+const PRAGMA_FUNCTION_READS = new Set([
+  "TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_LIST", "INDEX_XINFO",
+  "FOREIGN_KEY_LIST", "FOREIGN_KEY_CHECK", "TABLE_LIST", "QUICK_CHECK", "INTEGRITY_CHECK",
+]);
 const WRITE_TOKENS = new Set([
   "ALTER", "ATTACH", "CREATE", "DELETE", "DETACH", "DROP", "GRANT", "INSERT",
   "MERGE", "REINDEX", "REPLACE", "REVOKE", "TRUNCATE", "UPDATE", "VACUUM",
@@ -17,7 +25,7 @@ const WRITE_TOKENS = new Set([
 // identifiers, and comments are deliberately excluded from the token stream.
 interface SqlToken { value: string; start: number; end: number }
 
-function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres"): SqlToken[] {
+function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres", bodies?: string[]): SqlToken[] {
   const tokens: SqlToken[] = [];
   let i = 0;
   while (i < sql.length) {
@@ -40,20 +48,99 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres")
     }
     if (ch === "'" || ch === '"' || ch === "`") {
       const quote = ch;
-      const backslashEscapes = dialect === "postgres" && quote === "'" && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
-      i++;
+      const backslashEscapes = dialect === "postgres" && quote === "'"
+        && /[eE]/.test(sql[i - 1] ?? "") && (i < 2 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
+      const contentStart = ++i;
       while (i < sql.length) {
         if (sql[i] === quote) {
           if (sql[i + 1] === quote) { i += 2; continue; }
-          i++;
           break;
         }
         if (sql[i] === "\\" && backslashEscapes) i += 2;
         else i++;
       }
+      const contentEnd = i++;
+      if (bodies && quote === "'" && dialect === "postgres") {
+        // DO/AS routine bodies are single-quoted just as often as
+        // dollar-quoted — collect them for the migration function scan.
+        // Gating on the preceding token keeps 'pg_sleep' data literals from
+        // false-positiving (AS 'label' aliases are the contrived residue).
+        const last = tokens.at(-1)?.value;
+        const prev = tokens.at(-2)?.value;
+        if (last === "DO" || last === "AS" || ((last === "E" || last === "N") && (prev === "DO" || prev === "AS"))) {
+          bodies.push(sql.slice(contentStart, contentEnd).replace(/''/g, "'"));
+        }
+      }
+      // "name"( — a double-quoted identifier immediately calling — is a real
+      // function call in Postgres; emit it so the side-effect denylist sees
+      // it. Content inside string literals never reaches this branch.
+      if (quote === '"' && dialect === "postgres") {
+        // Comments count as whitespace between the name and the paren
+        // ("pg_sleep"/*…*/(5) is a real call).
+        let j = i;
+        const skipSpace = () => {
+          for (;;) {
+            while (j < sql.length && /\s/.test(sql[j]!)) j++;
+            if (sql[j] === "-" && sql[j + 1] === "-") { while (j < sql.length && sql[j] !== "\n") j++; continue; }
+            if (sql[j] === "/" && sql[j + 1] === "*") {
+              let cdepth = 1; j += 2;
+              while (j < sql.length && cdepth) {
+                if (sql[j] === "/" && sql[j + 1] === "*") { cdepth++; j += 2; }
+                else if (sql[j] === "*" && sql[j + 1] === "/") { cdepth--; j += 2; }
+                else j++;
+              }
+              continue;
+            }
+            break;
+          }
+        };
+        skipSpace();
+        const isUIdent = contentStart >= 3 && sql[contentStart - 2] === "&" && /[uU]/.test(sql[contentStart - 3]!);
+        // U&"name" UESCAPE 'c' is a single identifier — the clause sits
+        // between the closing quote and the call's paren, and comments are
+        // whitespace between its three tokens (base_yylex folds them into
+        // one identifier).
+        let uescape = "\\";
+        if (isUIdent) {
+          const kw = sql.slice(j).match(/^UESCAPE\b/i);
+          if (kw) {
+            j += kw[0].length;
+            skipSpace();
+            // The clause accepts any SCONST — 'c', E'c', N'c', or
+            // $$c$$/$tag$c$tag$ (base_yylex checks the token kind, not the
+            // quoting form). A clause that can't be consumed errors
+            // server-side, so leaving j there is still safe.
+            const dollar = sql.slice(j).match(/^\$([A-Za-z_0-9]*)\$[\s\S]*?\$\1\$/);
+            const quoted = dollar ? null : sql.slice(j).match(/^[eEnN]?'(?:[^'\\]|\\.|'')*'/);
+            if (dollar) {
+              uescape = dollar[0].slice(2 + dollar[1].length, dollar[0].length - 2 - dollar[1].length);
+              j += dollar[0].length; skipSpace();
+            } else if (quoted) {
+              uescape = quoted[0].replace(/^[eEnN]?'/, "").slice(0, -1).replace(/''/g, "'").replace(/\\(.)/g, "$1");
+              j += quoted[0].length; skipSpace();
+            }
+          }
+        }
+        if (sql[j] === "(") {
+          let name = sql.slice(contentStart, contentEnd);
+          // U&"…" decodes cXXXX and c+XXXXXX escapes (c defaults to \ but
+          // UESCAPE can redefine it) — a denylisted name must not hide
+          // behind either form. Postgres rejects a multi-char or
+          // out-of-range escape anyway, so decode only the single-char case.
+          if (isUIdent && uescape.length === 1) {
+            const esc = uescape.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            try {
+              name = name.replace(new RegExp(`${esc}\\+[0-9a-fA-F]{6}|${esc}[0-9a-fA-F]{4}`, "g"), m => String.fromCodePoint(parseInt(m.slice(1), 16)));
+            } catch { /* out-of-range escapes are server-side errors anyway */ }
+          }
+          tokens.push({ value: name.replace(/""/g, '"').toUpperCase(), start: contentStart - 1, end: i });
+        }
+      }
       continue;
     }
-    if (ch === "[") {
+    // [name] is a quoted identifier only in sqlite; in Postgres '[' opens an
+    // array subscript and must not swallow the rest of the statement.
+    if (ch === "[" && dialect === "sqlite") {
       const end = sql.indexOf("]", i + 1);
       i = end === -1 ? sql.length : end + 1;
       continue;
@@ -62,6 +149,7 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres")
       const tag = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
       if (tag) {
         const end = sql.indexOf(tag, i + tag.length);
+        if (bodies && end !== -1) bodies.push(sql.slice(i + tag.length, end));
         i = end === -1 ? sql.length : end + tag.length;
         continue;
       }
@@ -78,8 +166,8 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres")
   return tokens;
 }
 
-export function sqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string[] {
-  return scanSqlTokens(sql, dialect).map((token) => token.value).filter(value => !["(", ")", ","].includes(value));
+export function sqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres", bodies?: string[]): string[] {
+  return scanSqlTokens(sql, dialect, bodies).map((token) => token.value).filter(value => !["(", ")", ","].includes(value));
 }
 
 export function normalizeSingleStatement(sql: string, dialect: "sqlite" | "postgres" = "postgres"): string {
@@ -113,6 +201,9 @@ export function assertReadOnlySql(sql: string, dialect: "sqlite" | "postgres" = 
     if (!READ_PRAGMAS.has(name) || normalized.includes("=")) throw new DbError("not_read_only", `PRAGMA ${name || "statement"} is not an approved read`);
   }
   const structure = scanSqlTokens(normalized, dialect).map(token => token.value);
+  if (verb === "PRAGMA" && structure[2] === "(" && !PRAGMA_FUNCTION_READS.has(tokens[1] ?? "")) {
+    throw new DbError("not_read_only", `PRAGMA ${tokens[1] ?? "statement"}(…) is the write form`);
+  }
   let depth = 0;
   let explainOperation = verb === "EXPLAIN";
   let withMain = verb === "WITH" || (verb === "EXPLAIN" && structure.includes("WITH"));
@@ -127,8 +218,65 @@ export function assertReadOnlySql(sql: string, dialect: "sqlite" | "postgres" = 
     return operation && WRITE_TOKENS.has(token);
   });
   if (write) throw new DbError("not_read_only", `read-only query contains ${write}`);
+  if (dialect === "postgres") {
+    const fn = tokens.find(token => PG_SIDE_EFFECT_FUNCTIONS.has(token));
+    if (fn) throw new DbError("not_read_only", `read-only query cannot call ${fn}`);
+  }
   return normalized;
 }
+
+// A read transaction still allows SELECT to reach functions with server-side
+// effects — kills other backends, holds advisory locks past the transaction,
+// changes session GUCs, burns the statement, writes large objects / WAL /
+// remote rows, or reads server-local files back to the client. Quoted
+// identifiers and string literals are excluded from the token stream, so
+// matching a token means an actual function call.
+export const PG_SIDE_EFFECT_FUNCTIONS = new Set([
+  "PG_TERMINATE_BACKEND", "PG_CANCEL_BACKEND", "PG_SLEEP",
+  "PG_ADVISORY_LOCK", "PG_ADVISORY_LOCK_SHARED", "PG_ADVISORY_UNLOCK",
+  "PG_ADVISORY_UNLOCK_SHARED", "PG_ADVISORY_UNLOCK_ALL",
+  "PG_TRY_ADVISORY_LOCK", "PG_TRY_ADVISORY_LOCK_SHARED",
+  "PG_ADVISORY_XACT_LOCK", "PG_ADVISORY_XACT_LOCK_SHARED",
+  "PG_TRY_ADVISORY_XACT_LOCK", "PG_TRY_ADVISORY_XACT_LOCK_SHARED",
+  "SET_CONFIG", "PG_RELOAD_CONF", "PG_LOG_ROTATE", "PG_ROTATE_LOGFILE",
+  "PG_CREATE_RESTORE_POINT", "PG_SWITCH_WAL", "PG_SWITCH_LSN",
+  "PG_LOGICAL_EMIT_MESSAGE", "PG_PROMOTE",
+  "PG_FILE_WRITE", "PG_FILE_UNLINK", "PG_FILE_RENAME", "PG_FILE_SYNC",
+  "PG_EXECUTE_SERVER_PROGRAM",
+  // Server-filesystem readers exfiltrate files the DB role can reach —
+  // confidential, not just side-effecting.
+  "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_STAT_FILE",
+  "PG_LS_DIR", "PG_LS_LOGDIR", "PG_LS_WALDIR", "PG_LS_TMPDIR",
+  "PG_LS_ARCHIVE_STATUSDIR", "PG_LS_REPLSLOTDIR",
+  // pg_backup_start writes backup_label outside the transaction; the
+  // walinspect family exposes raw WAL (same exfiltration class as the file
+  // readers); pg_log_backend_memory_contexts writes server logs.
+  "PG_BACKUP_START", "PG_BACKUP_STOP", "PG_LOG_BACKEND_MEMORY_CONTEXTS",
+  "PG_GET_WAL_RECORDS_INFO", "PG_GET_WAL_RECORD_INFO", "PG_GET_WAL_STATS",
+  "PG_GET_WAL_BLOCK_INFO", "PG_GET_WAL_FPI_INFO",
+  // Replication slots/origins and snapshot export persist catalog or file
+  // state outside the transaction; wal-replay pause and index maintenance
+  // are superuser side effects.
+  "PG_EXPORT_SNAPSHOT",
+  "PG_CREATE_PHYSICAL_REPLICATION_SLOT", "PG_CREATE_LOGICAL_REPLICATION_SLOT",
+  "PG_COPY_PHYSICAL_REPLICATION_SLOT", "PG_COPY_LOGICAL_REPLICATION_SLOT",
+  "PG_DROP_REPLICATION_SLOT", "PG_REPLICATION_SLOT_ADVANCE",
+  "PG_REPLICATION_ORIGIN_CREATE", "PG_REPLICATION_ORIGIN_DROP",
+  "PG_REPLICATION_ORIGIN_ADVANCE", "PG_REPLICATION_ORIGIN_SESSION_SETUP",
+  "PG_REPLICATION_ORIGIN_XACT_SETUP",
+  "PG_WAL_REPLAY_PAUSE", "PG_WAL_REPLAY_RESUME",
+  "BRIN_SUMMARIZE_NEW_VALUES", "BRIN_SUMMARIZE_RANGE", "BRIN_DESUMMARIZE_RANGE",
+  "GIN_CLEAN_PENDING_LIST",
+  "PG_STAT_RESET", "PG_STAT_RESET_SHARED", "PG_STAT_RESET_SLRU",
+  "PG_STAT_RESET_SINGLE_TABLE_COUNTERS", "PG_STAT_RESET_SINGLE_FUNCTION_COUNTERS",
+  "PG_STAT_RESET_REPLICATION_SLOT", "PG_STAT_RESET_SUBSCRIPTION",
+  "LO_IMPORT", "LO_EXPORT", "LO_UNLINK", "LO_CREAT", "LO_CREATE", "LO_PUT", "LO_FROM_BYTEA",
+  // `dblink(...)` itself runs arbitrary SQL on a separate remote session the
+  // local read-only transaction does not cover; the connect/exec helpers
+  // above are its siblings.
+  "DBLINK", "DBLINK_CONNECT", "DBLINK_CONNECT_U", "DBLINK_EXEC", "DBLINK_SEND_QUERY",
+  "PG_NOTIFY", "PG_LOGICAL_SLOT_GET_CHANGES",
+]);
 
 const TRANSACTION_VERBS = new Set(["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE", "ABORT"]);
 

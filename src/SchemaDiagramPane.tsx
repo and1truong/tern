@@ -3,7 +3,7 @@ import type { DbSchema } from "../shared/types.ts";
 import { tableKey, tableLabel } from "../shared/sqlIdentifiers.ts";
 import { relationTarget, schemaRelations, schemaToMermaid } from "./schemaDiagram.ts";
 
-export function SchemaDiagramPane({ schema }: { schema: DbSchema }) {
+export function SchemaDiagramPane({ schema, visible = true }: { schema: DbSchema; visible?: boolean }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 24, y: 24 });
   const [focus, setFocus] = useState('');
@@ -20,7 +20,9 @@ export function SchemaDiagramPane({ schema }: { schema: DbSchema }) {
     setZoom(Math.max(.1, Math.min(1.5, (bounds.width - 48) / (columns * 300), (bounds.height - 48) / (Math.ceil(tables.length / columns) * (rowHeight + 50)))));
     setPan({ x: 24, y: 24 });
   };
-  useEffect(fit, [schema]);
+  // Hidden (display:none) panes measure 0 — refit once the tab becomes
+  // visible or the 10% floor stays squashed until a manual Fit.
+  useEffect(() => { if (visible) fit(); }, [schema, visible]);
   const exportMermaid = () => {
     const url = URL.createObjectURL(new Blob([schemaToMermaid(schema)], { type: 'text/plain' }));
     const link = document.createElement('a'); link.href = url; link.download = 'relationships.mmd'; link.click(); URL.revokeObjectURL(url);

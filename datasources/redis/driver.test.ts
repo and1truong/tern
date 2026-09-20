@@ -101,6 +101,18 @@ describe("console exec", () => {
     await expect(session.console!.exec("GET k", { writable: true })).rejects.toBeInstanceOf(DbError);
   });
 
+  test("NOTBUSY is a routine command error, not a session-fatal transport failure", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "SCRIPT") throw new Error("NOTBUSY No scripts in execution right now.");
+      return "OK";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const result = await session.console!.exec("SCRIPT KILL", { writable: true });
+    // A bare NOTBUSY on an injectable transport must still land as an err
+    // reply — treating it as a transport failure would evict the session.
+    expect(result.reply).toEqual({ t: "err", s: "NOTBUSY No scripts in execution right now." });
+  });
+
   test("indefinite blocking commands are refused; timed ones run", async () => {
     const { factory, calls } = makeFake(INFO_REDIS);
     const session = await makeRedisDriver(factory).connect({ url: URL });
@@ -109,6 +121,11 @@ describe("console exec", () => {
     expect(String((refused.reply as { s: string }).s)).toMatch(/indefinitely/);
     await session.console!.exec("BLPOP queue 5", { writable: true });
     expect(calls.at(-1)).toEqual({ command: "BLPOP", args: ["queue", "5"] });
+    // A consumer group literally named STREAMS must not hide BLOCK 0.
+    const xrg = await session.console!.exec("XREADGROUP GROUP STREAMS c BLOCK 0 STREAMS s >", { writable: true });
+    expect(xrg.reply.t).toBe("err");
+    expect(String((xrg.reply as { s: string }).s)).toMatch(/indefinitely/);
+    expect(calls.some(c => c.command === "XREADGROUP")).toBe(false);
   });
 
   test("catalog merges COMMAND DOCS when available, falls back cleanly", async () => {
@@ -150,7 +167,9 @@ describe("explorer scan", () => {
   test("TYPE filtering requires Redis 6", async () => {
     const { factory } = makeFake(INFO_REDIS5, (command) => command === "SCAN" ? ["0", []] : "OK");
     const session = await makeRedisDriver(factory).connect({ url: URL });
-    await expect(session.explorer!.scan({ cursor: "0", type: "string" })).rejects.toMatchObject({ code: "sql" });
+    // A capability rejection is a request error, not a transport failure —
+    // the session stays cached.
+    await expect(session.explorer!.scan({ cursor: "0", type: "string" })).rejects.toMatchObject({ code: "invalid_change" });
   });
 });
 
@@ -162,6 +181,7 @@ describe("explorer inspect", () => {
       case "MEMORY": return 42;
       case "STRLEN": return 5;
       case "GET": return args[0] === "s" ? "hello" : null;
+      case "GETRANGE": return args[0] === "s" ? "hello" : null;
       case "HSCAN": return ["7", ["f1", "v1", "f2", "v2"]];
       case "ZSCAN": return ["0", ["m1", "1.5"]];
       case "XLEN": return 3;
@@ -189,7 +209,18 @@ describe("explorer inspect", () => {
     const session = await makeRedisDriver(factory).connect({ url: URL });
     const inspection = await session.explorer!.inspect("s");
     expect(inspection.value).toEqual({ kind: "string", value: "", truncated: true, lengthBytes: 2_000_000 });
+    expect(calls.some(c => c.command === "GET" || c.command === "GETRANGE")).toBe(false);
+  });
+
+  test("string reads stay bounded even when STRLEN answered", async () => {
+    // STRLEN and the value read are separate round trips — a concurrent SET
+    // could grow the value between them, so the read is always GETRANGE.
+    const { factory, calls } = makeFake(INFO_REDIS, baseResponder);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("s");
+    expect(inspection.value).toMatchObject({ kind: "string", value: "hello" });
     expect(calls.some(c => c.command === "GET")).toBe(false);
+    expect(calls.find(c => c.command === "GETRANGE")?.args).toEqual(["s", "0", String(1_000_000 - 1)]);
   });
 
   test("hash pages pair fields with values and return the cursor", async () => {
@@ -238,6 +269,20 @@ describe("explorer inspect", () => {
     expect(legacyPage.value.entries.map(e => e.id)).toEqual(["6-1"]);
   });
 
+  test("a stream field literally named __proto__ survives inspection", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "stream";
+      if (command === "TTL") return -1;
+      if (command === "XRANGE") return [["1-1", ["__proto__", "pwn", "f", "v"]]];
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("s");
+    if (inspection.value.kind !== "stream") throw new Error("expected stream value");
+    expect(inspection.value.entries[0]?.fields["__proto__"]).toBe("pwn");
+    expect(JSON.stringify(inspection.value.entries[0]?.fields)).toContain("pwn");
+  });
+
   test("missing keys and unknown server types degrade gracefully", async () => {
     const { factory } = makeFake(INFO_REDIS, (command, args) => {
       if (command === "TYPE") return args[0] === "gone" ? "none" : "ReJSON-RL";
@@ -262,6 +307,22 @@ describe("explorer keyOp", () => {
     const legacySession = await makeRedisDriver(legacy.factory).connect({ url: URL });
     await legacySession.explorer!.keyOp({ op: "setString", key: "s", value: "v2" });
     expect(legacy.calls.at(-1)).toEqual({ command: "SET", args: ["s", "v2"] });
+
+    // An INFO that reports no version (proxy/managed service) must fail
+    // loud with KEEPTTL — a plain SET would silently drop the TTL on ≥6.
+    const unknown = makeFake(INFO_REDIS.split("\r\n").filter(line => !line.includes("_version:")).join("\r\n"));
+    const unknownSession = await makeRedisDriver(unknown.factory).connect({ url: URL });
+    await unknownSession.explorer!.keyOp({ op: "setString", key: "s", value: "v2" });
+    expect(unknown.calls.at(-1)).toEqual({ command: "SET", args: ["s", "v2", "KEEPTTL"] });
+
+    // Versions that do not parse as numbers (n/a, v7) are unknown too —
+    // only a positively-known pre-6 server gets the plain SET.
+    for (const version of ["n/a", "v7"]) {
+      const odd = makeFake(INFO_REDIS.replace(/redis_version:[^\r\n]*/, `redis_version:${version}`));
+      const oddSession = await makeRedisDriver(odd.factory).connect({ url: URL });
+      await oddSession.explorer!.keyOp({ op: "setString", key: "s", value: "v2" });
+      expect(odd.calls.at(-1), version).toEqual({ command: "SET", args: ["s", "v2", "KEEPTTL"] });
+    }
   });
 
   test("delete returns the affected count", async () => {
@@ -391,5 +452,276 @@ describe("codex round 4 regressions", () => {
       expect(String((result.reply as { s: string }).s), command).toMatch(/refused by Tern/);
       expect(calls.some(c => c.command === command.split(" ")[0]), command).toBe(false);
     }
+  });
+});
+
+describe("codex round 5 regressions", () => {
+  test("commands that would poison the shared transport never reach it", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    for (const command of [
+      "RESET", "QUIT", "AUTH secret", "HELLO 3", "MONITOR",
+      "MULTI", "EXEC", "DISCARD", "WATCH k", "UNWATCH",
+      "ASKING", "READONLY", "READWRITE", "SSUBSCRIBE chan",
+      "CLIENT REPLY OFF", "CLIENT TRACKING ON", "CLIENT PAUSE 100",
+      // Shared-connection mutators — every session user shares the state.
+      "CLIENT SETNAME x", "CLIENT SETINFO lib-name x", "CLIENT NO-EVICT on",
+      "CLIENT NO-TOUCH on", "CLIENT CACHING yes", "CLIENT UNBLOCK 5",
+      "CLIENT UNPAUSE", "CLIENT CAPA RESP3",
+      // LDB parks the shared transport inside the Lua debugger.
+      "SCRIPT DEBUG YES", "SCRIPT DEBUG SYNC",
+    ]) {
+      const result = await session.console!.exec(command, { writable: true });
+      expect(result.reply.t, command).toBe("err");
+      expect(String((result.reply as { s: string }).s), command).toMatch(/refused by Tern/);
+    }
+    // Only INFO (from connect) reached the transport — nothing else.
+    expect(calls.filter(c => c.command !== "INFO")).toEqual([]);
+    // Read-side CLIENT subcommands still run fine.
+    const list = await session.console!.exec("CLIENT LIST", { writable: true });
+    expect(list.reply).toEqual({ t: "str", s: "OK" });
+  });
+
+  test("blocking commands beyond the console maximum are refused up front", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const result = await session.console!.exec("BLPOP queue 999999", { writable: true });
+    expect(result.reply.t).toBe("err");
+    expect(String((result.reply as { s: string }).s)).toMatch(/maximum/);
+    expect(calls.filter(c => c.command === "BLPOP")).toEqual([]);
+    // Unparseable timeouts still reach the server for its own error reply.
+    const sent = await session.console!.exec("BLPOP queue notanumber", { writable: true });
+    expect(sent.reply).toEqual({ t: "str", s: "OK" });
+    expect(calls.filter(c => c.command === "BLPOP")).toHaveLength(1);
+  });
+
+  test("a hung command rejects with a timeout error so the session can be evicted", async () => {
+    const factory: TransportFactory = () => ({
+      send: async (command) => { if (command === "INFO") return INFO_REDIS; return new Promise(() => {}); },
+      connect: async () => {},
+      close: async () => {},
+    });
+    const session = await makeRedisDriver(factory, { commandTimeoutMs: 30 }).connect({ url: URL });
+    await expect(session.console!.exec("GET k", { writable: true })).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  test("ACL-denied auxiliary probes degrade instead of failing the inspection", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "string";
+      if (command === "MEMORY") throw new Error("NOPERM this user has no permissions to run the 'memory' command");
+      if (command === "TTL") return -1;
+      if (command === "STRLEN") return 5;
+      if (command === "GETRANGE") return "hello";
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("s");
+    expect(inspection.memoryBytes).toBeNull();
+    expect(inspection.value).toMatchObject({ kind: "string", value: "hello" });
+  });
+
+  test("a transport failure during scan's TYPE pass propagates as a DbError", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "SCAN") return ["0", ["a"]];
+      if (command === "TYPE") throw new Error("ECONNREFUSED: connection refused");
+      return "OK";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.explorer!.scan({ cursor: "0" })).rejects.toBeInstanceOf(DbError);
+  });
+
+  test("malformed stream cursors are rejected before reaching the server", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "stream";
+      if (command === "TTL") return -1;
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.explorer!.inspect("st", "bogus")).rejects.toMatchObject({ code: "invalid_change" });
+    expect(calls.some(c => c.command === "XRANGE")).toBe(false);
+  });
+
+  test("extended server error prefixes arrive as err replies, not session failures", async () => {
+    for (const message of ["WRONGTYPE Operation against a key", "NOPERM no permissions", "CLUSTERDOWN the cluster is down", "BUSYKEY target key exists"]) {
+      const { factory } = makeFake(INFO_REDIS, (command) => { if (command === "GET") throw new Error(message); return "OK"; });
+      const session = await makeRedisDriver(factory).connect({ url: URL });
+      const result = await session.console!.exec("GET k", { writable: true });
+      expect(result.reply.t, message).toBe("err");
+      expect((result.reply as { s: string }).s).toBe(message);
+    }
+  });
+});
+
+describe("codex round 6 regressions", () => {
+  test("replication-stream commands are refused before reaching the transport", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    for (const command of ["SYNC", "PSYNC ? -1", "REPLCONF listening-port 6379"]) {
+      const result = await session.console!.exec(command, { writable: true });
+      expect(result.reply.t, command).toBe("err");
+      expect(String((result.reply as { s: string }).s), command).toMatch(/refused by Tern/);
+    }
+    expect(calls.filter(c => c.command !== "INFO")).toEqual([]);
+  });
+
+  test("refusals beat the writable gate on read-only sessions", async () => {
+    const { factory } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const result = await session.console!.exec("SELECT 1", { writable: false });
+    expect(result.reply.t).toBe("err");
+    expect(String((result.reply as { s: string }).s)).toMatch(/refused by Tern/);
+  });
+
+  test("read subcommands of admin containers run on read-only sessions", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    for (const command of ["MEMORY USAGE k", "ACL WHOAMI", "SLOWLOG LEN", "CLUSTER INFO"]) {
+      const result = await session.console!.exec(command, { writable: false });
+      expect(result.reply, command).toEqual({ t: "str", s: "OK" });
+    }
+    expect(calls.filter(c => c.command !== "INFO")).toHaveLength(4);
+    await expect(session.console!.exec("ACL SETUSER alice on", { writable: false })).rejects.toMatchObject({ code: "not_read_only" });
+    await expect(session.console!.exec("MEMORY PURGE", { writable: false })).rejects.toMatchObject({ code: "not_read_only" });
+  });
+
+  test("a typed timeout DbError is never reclassified by its message prefix", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "GET") throw new DbError("timeout", "OOM command timed out");
+      return "OK";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.console!.exec("GET k", { writable: true })).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  test("nil numeric replies stay null instead of collapsing to 0", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "string";
+      if (command === "TTL" || command === "MEMORY" || command === "STRLEN") return null;
+      if (command === "GETRANGE") return "v";
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("s");
+    expect(inspection.memoryBytes).toBeNull();
+    expect(inspection.size).toBeNull();
+    expect(inspection.value).toMatchObject({ kind: "string", value: "v" });
+    // An unknown STRLEN must fall back to a bounded GETRANGE — an
+    // unbounded GET could pull a multi-GB value into memory.
+    const fetch = calls.findLast(c => c.command === "GETRANGE");
+    expect(fetch).toBeDefined();
+    expect(fetch!.args.at(-1)).not.toBe("-1");
+    expect(calls.some(c => c.command === "GET")).toBe(false);
+  });
+
+  test("malformed list/hash/set/zset and scan cursors are rejected", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "list";
+      if (command === "TTL") return -1;
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.explorer!.inspect("l", "bogus")).rejects.toMatchObject({ code: "invalid_change" });
+    // A cursor past MAX_SAFE_INTEGER would serialize as "1e+21" on the wire.
+    await expect(session.explorer!.inspect("l", "9".repeat(20))).rejects.toMatchObject({ code: "invalid_change" });
+    await expect(session.explorer!.scan({ cursor: "bogus" })).rejects.toMatchObject({ code: "invalid_change" });
+    expect(calls.some(c => c.command === "LRANGE" || c.command === "SCAN")).toBe(false);
+    for (const type of ["hash", "set", "zset"]) {
+      const { factory: f } = makeFake(INFO_REDIS, (command) => {
+        if (command === "TYPE") return type;
+        if (command === "TTL") return -1;
+        return null;
+      });
+      const s = await makeRedisDriver(f).connect({ url: URL });
+      await expect(s.explorer!.inspect("k", "bogus"), type).rejects.toMatchObject({ code: "invalid_change" });
+    }
+  });
+
+  test("infinite zset scores cross the wire as strings", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "zset";
+      if (command === "TTL") return -1;
+      if (command === "ZSCAN") return ["0", ["a", "inf", "b", "-inf", "c", "1.5"]];
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("z");
+    expect(inspection.value).toMatchObject({
+      kind: "zset",
+      entries: [
+        { member: "a", score: "inf" },
+        { member: "b", score: "-inf" },
+        { member: "c", score: 1.5 },
+      ],
+    });
+  });
+});
+
+describe("codex round 7 regressions", () => {
+  test("a STORE/STOREDIST flag makes a read command require writes", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    for (const command of ["GEORADIUS geo 0 0 1 km STORE dst", "GEORADIUSBYMEMBER geo m 1 km STOREDIST dst", "SORT k STORE dst"]) {
+      await expect(session.console!.exec(command, { writable: false }), command).rejects.toMatchObject({ code: "not_read_only" });
+    }
+    // Bare reads still run on read-only sessions.
+    for (const command of ["GEORADIUS geo 0 0 1 km", "SORT k ALPHA"]) {
+      const result = await session.console!.exec(command, { writable: false });
+      expect(result.reply, command).toEqual({ t: "str", s: "OK" });
+    }
+    expect(calls.filter(c => c.command !== "INFO")).toHaveLength(2);
+  });
+
+  test("BZMPOP resolves its leading timeout for the blocking guards", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const refused = await session.console!.exec("BZMPOP 0 1 k MIN", { writable: true });
+    expect(String((refused.reply as { s: string }).s)).toMatch(/indefinitely/);
+    const capped = await session.console!.exec("BZMPOP 999999 1 k MIN", { writable: true });
+    expect(String((capped.reply as { s: string }).s)).toMatch(/maximum/);
+    expect(calls.filter(c => c.command === "BZMPOP")).toEqual([]);
+  });
+
+  test("unsubscribe commands are refused — confirmations would desync replies", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    for (const command of ["UNSUBSCRIBE a b", "PUNSUBSCRIBE p*", "SUNSUBSCRIBE chan", "CLIENT KILL ID 3"]) {
+      const result = await session.console!.exec(command, { writable: true });
+      expect(result.reply.t, command).toBe("err");
+      expect(String((result.reply as { s: string }).s), command).toMatch(/refused by Tern/);
+    }
+    expect(calls.filter(c => c.command !== "INFO")).toEqual([]);
+  });
+
+  test("CLIENT read subcommands run on read-only sessions", async () => {
+    const { factory } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const result = await session.console!.exec("CLIENT LIST", { writable: false });
+    expect(result.reply).toEqual({ t: "str", s: "OK" });
+  });
+
+  test("NOAUTH is session-fatal: it throws instead of becoming an err reply", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "GET") throw new Error("NOAUTH Authentication required");
+      return "OK";
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    await expect(session.console!.exec("GET k", { writable: true })).rejects.toMatchObject({ code: "sql" });
+  });
+
+  test("auth failures stay session-fatal even with Bun's ERR_REDIS_SERVER_ERROR code", async () => {
+    for (const message of ["NOAUTH Authentication required", "WRONGPASS invalid username-password pair", "DENIED Redis is running in protected mode"]) {
+      const { factory } = makeFake(INFO_REDIS, (command) => {
+        if (command === "GET") throw Object.assign(new Error(message), { code: "ERR_REDIS_SERVER_ERROR" });
+        return "OK";
+      });
+      const session = await makeRedisDriver(factory).connect({ url: URL });
+      await expect(session.console!.exec("GET k", { writable: true }), message).rejects.toMatchObject({ code: "sql" });
+    }
+  });
+
+  test("a nil keyOp reply omits n rather than reporting 0", async () => {
+    const { factory } = makeFake(INFO_REDIS, () => null);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    expect(await session.explorer!.keyOp({ op: "persist", key: "k" })).toEqual({ ok: true });
   });
 });

@@ -43,6 +43,112 @@ describe("SQL read-only safety", () => {
     expect(boundReadSql("PRAGMA table_info(users)", 10)).toBe("PRAGMA table_info(users)");
     expect(() => assertReadOnlySql("PRAGMA foreign_keys = OFF")).toThrow(DbError);
     expect(() => assertReadOnlySql("PRAGMA writable_schema")).toThrow(DbError);
+    // PRAGMA x(y) is the SET form — the `=` check alone misses it.
+    for (const sql of ["PRAGMA user_version(123)", "PRAGMA application_id(9)", "PRAGMA schema_version(2)", "PRAGMA journal_mode(DELETE)"]) {
+      expect(() => assertReadOnlySql(sql, "sqlite"), sql).toThrow(DbError);
+      expect(() => assertReadOnlyScript(sql, "sqlite"), sql).toThrow(DbError);
+    }
+    // Function-arg reads stay allowed.
+    expect(boundReadSql("PRAGMA foreign_key_list(t)", 10)).toBe("PRAGMA foreign_key_list(t)");
+    expect(boundReadSql("PRAGMA journal_mode", 10)).toBe("PRAGMA journal_mode");
+  });
+
+  test("a read-only postgres query cannot call functions with server-side effects", () => {
+    for (const sql of [
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity",
+      "SELECT pg_advisory_lock(1)",
+      "SELECT set_config('work_mem', '1GB', false)",
+      "SELECT pg_sleep(60)",
+      "SELECT pg_catalog.pg_reload_conf()",
+      "SELECT lo_import('/etc/passwd')",
+      "SELECT dblink_exec('c', 'DELETE FROM t')",
+      "SELECT * FROM dblink('host=x dbname=y', 'DELETE FROM t RETURNING *') AS s(n int)",
+      "SELECT pg_notify('chan', 'payload')",
+      "SELECT pg_logical_slot_get_changes('slot', NULL, NULL)",
+      "WITH x AS (SELECT pg_cancel_backend(1)) SELECT * FROM x",
+      // A double-quoted identifier followed by ( is still a call — comments
+      // count as whitespace between the name and the paren.
+      'SELECT "pg_sleep"(60)',
+      'SELECT "pg_sleep" /*x*/ (60)',
+      "SELECT \"pg_sleep\"--c\n(60)",
+      'SELECT "set_config"(\'work_mem\',\'1GB\',false)',
+      'SELECT "pg_terminate_backend"(\'12345\')',
+      'SELECT * FROM "dblink"(\'host=x dbname=y\',\'DELETE FROM t RETURNING 1\') s(n int)',
+      // Server-side filesystem/exec/stat functions added to the denylist.
+      "SELECT pg_rotate_logfile()",
+      "SELECT pg_file_write('a.conf', 'x', false)",
+      "SELECT pg_execute_server_program('id')",
+      "SELECT pg_promote(false, 0)",
+      "SELECT pg_logical_emit_message(false, 'm', 'x')",
+      "SELECT pg_stat_reset()",
+      // Server-filesystem readers exfiltrate files back to the client.
+      "SELECT pg_read_file('/etc/postgresql/postgresql.key')",
+      "SELECT pg_read_binary_file('/x', 0, 10)",
+      "SELECT pg_stat_file('/var/lib/postgresql/data')",
+      "SELECT pg_ls_dir('/var/lib/postgresql')",
+      "SELECT pg_ls_waldir()",
+      'SELECT "pg_ls_tmpdir"()',
+      // U&"…" identifiers decode \XXXX/\+XXXXXX escapes — the denylist
+      // must see the decoded name, not the escaped spelling.
+      'SELECT U&"pg\\005fread\\005ffile"(\'/etc/hostname\')',
+      'SELECT U&"pg\\005fterminate\\005fbackend"(12345)',
+      'SELECT U&"pg\\005fsleep"(600)',
+      'SELECT u&"DBLINK"(\'x\',\'y\')',
+      // Non-transactional effects that survive a read-only transaction.
+      "SELECT pg_backup_start('x', false)",
+      "SELECT pg_log_backend_memory_contexts(1)",
+      "SELECT pg_get_wal_records_info('0/0', 'FFFFFFFF/FFFFFFFF')",
+      // UESCAPE redefines the escape char — the name still decodes and the
+      // trailing ( still counts as a call.
+      'SELECT U&"pg_sleep" UESCAPE \'!\' (600)',
+      'SELECT U&"pg!005fsleep" UESCAPE \'!\' (600)',
+      // Comments are whitespace between the UESCAPE clause's three tokens —
+      // an unconsumed clause must not make the call invisible.
+      'SELECT U&"pg_sleep" UESCAPE /*x*/ \'!\' (600)',
+      "SELECT U&\"pg_read_file\" UESCAPE --x\n'!' ('/etc/passwd', 0, 200)",
+      'SELECT U&"pg_terminate_backend" UESCAPE --x\n\'!\' (12345)',
+      // The clause accepts any SCONST — dollar-quoted and E/N-prefixed
+      // literals define the escape char just as '…' does; an unconsumed
+      // one must not make the call invisible.
+      'SELECT U&"pg!005fsleep" UESCAPE $$!$$ (5)',
+      'SELECT U&"pg!005fread!005ffile" UESCAPE $e$!$e$ (\'/etc/passwd\')',
+      'SELECT U&"pg!005fterminate!005fbackend" UESCAPE E\'!\' (12345)',
+      // Replication slots/origins, snapshots, wal replay, index maintenance.
+      "SELECT pg_create_logical_replication_slot('s','test_decoding')",
+      "SELECT pg_drop_replication_slot('s')",
+      "SELECT pg_replication_origin_create('o')",
+      "SELECT pg_export_snapshot()",
+      "SELECT pg_wal_replay_pause()",
+      "SELECT brin_summarize_new_values('i')",
+      "SELECT pg_stat_reset_subscription('s')",
+    ]) {
+      expect(() => assertReadOnlySql(sql, "postgres"), sql).toThrow(DbError);
+    }
+    // A plain U& identifier without escapes still resolves to its name.
+    expect(() => assertReadOnlySql('SELECT U&"pg_sleep"(1)', "postgres")).toThrow(DbError);
+    // The same names inside literals, quoted identifiers or comments are not calls.
+    expect(assertReadOnlySql("SELECT 'pg_terminate_backend'", "postgres")).toContain("pg_terminate_backend");
+    expect(assertReadOnlySql('SELECT "pg_terminate_backend" FROM t', "postgres")).toContain("pg_terminate_backend");
+    expect(assertReadOnlySql("SELECT 1 /* pg_advisory_lock(1) */", "postgres")).toContain("SELECT");
+    // And the denylist only applies to postgres.
+    expect(assertReadOnlySql("SELECT pg_sleep FROM t", "sqlite")).toContain("pg_sleep");
+  });
+
+  test("a backslash cannot protect a closing quote inside U& strings", () => {
+    // In U&'…' the escape char only forms cXXXX/c+XXXXXX/cc — \' is either
+    // an invalid escape (default c=\) or a literal backslash (UESCAPE), so
+    // the quote closes the literal and the second statement is scanned.
+    expect(() => assertReadOnlyScript("SELECT U&'x\\' UESCAPE '!'; SELECT pg_sleep(600)", "postgres")).toThrow(DbError);
+    expect(() => assertReadOnlySql("SELECT U&'x\\' UESCAPE '!'; SELECT pg_sleep(600)", "postgres")).toThrow(DbError);
+  });
+
+  test("postgres array subscripts do not desync the tokenizer", () => {
+    // '[' is not a quoted-identifier open in postgres — a ']' inside a string
+    // literal must not swallow the rest of the script.
+    expect(() => assertReadOnlySql("SELECT arr[length('a]')]; DELETE FROM t", "postgres")).toThrow(DbError);
+    expect(() => assertReadOnlyScript("SELECT arr[1]; DELETE FROM t", "postgres")).toThrow(DbError);
+    // A plain subscripted read still passes.
+    expect(assertReadOnlySql("SELECT arr[1] FROM t", "postgres")).toContain("arr[1]");
   });
 });
 

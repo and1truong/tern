@@ -31,7 +31,11 @@ export async function awaitControlled<T>(
   }
 }
 
-export async function controlledPg<T>(url: string, connection: Awaited<ReturnType<SQL['reserve']>>, query: CancellableQuery<T>, signal?: AbortSignal, timeoutMs = 30_000): Promise<T> {
+// The query is a thunk so it is only built (and, on eagerly-dispatching
+// drivers, sent) AFTER the backend pid is known — otherwise the pid lookup
+// queues behind the target on the max:1 connection and cancellation arms
+// post-completion.
+export async function controlledPg<T>(url: string, connection: Awaited<ReturnType<SQL['reserve']>>, query: () => CancellableQuery<T>, signal?: AbortSignal, timeoutMs = 30_000): Promise<T> {
   if (signal?.aborted) throw new DbError('cancelled', 'Query cancelled');
   const rows = await connection.unsafe('SELECT pg_backend_pid() AS pid');
   const pid = Number(rows[0].pid);
@@ -48,6 +52,15 @@ export async function controlledPg<T>(url: string, connection: Awaited<ReturnTyp
   signal?.addEventListener('abort', cancel, { once: true });
   const timer = setTimeout(cancel, timeoutMs);
   if (signal?.aborted) cancel();
-  try { return await awaitControlled(query, signal, timeoutMs); }
-  finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); await cancellation; }
+  try { return await awaitControlled(query(), signal, timeoutMs); }
+  finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+    // A control connection that accepts but never answers must not wedge
+    // the release path — bound the drain. The abandoned side still closes
+    // itself eventually (a stalled connect self-heals via the client's
+    // connection timeout); a permanently hung RPC outlives this wait and
+    // leaks its socket until the OS reclaims it — inherent to bounding it.
+    if (cancellation) await Promise.race([cancellation, new Promise(r => setTimeout(r, 5_000))]);
+  }
 }

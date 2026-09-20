@@ -24,6 +24,18 @@ test("application database remains protected when configured through a symlink",
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("the app database self-open guard fails closed without an explicit appPath", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tern-app-guard-')));
+  const path = join(dir, 'app.sqlite');
+  const db = openAppDatabase(path);
+  const app = makeApp(db);
+  try {
+    const response = await app(new Request('http://localhost/api/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain('application database');
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("standalone API persists state and recent files, denies implicit access/writes, and gates migration apply", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'tern-app-')));
   const path = join(dir, 'user.sqlite');
@@ -35,7 +47,7 @@ test("standalone API persists state and recent files, denies implicit access/wri
     expect((await post('datasource/query', { path, sql: 'SELECT * FROM users' })).status).toBe(403);
     expect((await post('open', { path }, { origin: 'https://evil.example' })).status).toBe(403);
     expect((await post('open', { path })).status).toBe(200);
-    expect((await post('datasource/query', { path, sql: 'DELETE FROM users' })).status).toBe(400);
+    expect((await post('datasource/query', { path, sql: 'DELETE FROM users' })).status).toBe(403);
     expect((await post('datasource/exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
     expect((await post('access', { path, writable: true })).status).toBe(200);
     expect((await post('datasource/exec', { path, sql: 'DELETE FROM users', allowWrite: true }, { 'x-tern-session': 'new-window' })).status).toBe(403);
@@ -61,7 +73,7 @@ test("standalone API persists state and recent files, denies implicit access/wri
     await post('open', { path });
     expect((await post('datasource/exec', { path, sql: 'DELETE FROM users', allowWrite: true })).status).toBe(403);
     expect((await post('datasource/exec', { path, sql: 'BEGIN; SELECT * FROM users; COMMIT' })).status).toBe(200);
-    expect((await post('datasource/exec', { path, sql: 'BEGIN; DELETE FROM users; COMMIT' })).status).toBe(400);
+    expect((await post('datasource/exec', { path, sql: 'BEGIN; DELETE FROM users; COMMIT' })).status).toBe(403);
     expect((await post('datasource/exec', { path, sql: 'SELECT COUNT(*) AS n FROM users' })).status).toBe(200);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -90,7 +102,7 @@ test("datasource routes resolve profiles through registered drivers and gate wri
     const read = await post('datasource/command', { connId: profile.id, command: 'GET k' });
     expect(read.status).toBe(200);
     expect((await read.json()).reply).toEqual({ t: 'str', s: 'v1' });
-    expect((await post('datasource/command', { connId: profile.id, command: 'SET k v' })).status).toBe(400);
+    expect((await post('datasource/command', { connId: profile.id, command: 'SET k v' })).status).toBe(403);
     expect((await post('access', { connId: profile.id, writable: true })).status).toBe(200);
     expect((await post('datasource/command', { connId: profile.id, command: 'SET k v' })).status).toBe(200);
     expect(calls.some(c => c.command === 'SET')).toBe(true);
@@ -104,6 +116,17 @@ test("datasource routes resolve profiles through registered drivers and gate wri
   } finally { db.close(); }
 });
 
+test("a sqlite profile cannot be saved — files must go through the /open gate", async () => {
+  const db = openAppDatabase(':memory:');
+  const app = makeApp(db);
+  try {
+    const res = await app(new Request('http://localhost/api/connections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ driver: 'sqlite', label: 'bypass', url: '/tmp/anywhere.sqlite' }) }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/driver/i);
+    expect(db.query("SELECT count(*) AS n FROM datasource_connections").get()).toEqual({ n: 0 });
+  } finally { db.close(); }
+});
+
 test("state DELETE accepts redis console keys", async () => {
   const db = openAppDatabase(':memory:');
   const app = makeApp(db);
@@ -114,5 +137,22 @@ test("state DELETE accepts redis console keys", async () => {
     expect(removed.status).toBe(200);
     expect(db.query("SELECT count(*) AS n FROM app_state WHERE key = 'redis:doc-9'").get()).toEqual({ n: 0 });
     expect((await app(new Request('http://localhost/api/state?key=evil:key', { method: 'DELETE' }))).status).toBe(400);
+  } finally { db.close(); }
+});
+
+test("state keys are an anchored allowlist and sessions cannot contain '/'", async () => {
+  const db = openAppDatabase(':memory:');
+  const app = makeApp(db);
+  try {
+    const post = (key: string) => app(new Request('http://localhost/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, value: 1 }) }));
+    // `documents_evil` must not satisfy the `documents` prefix.
+    expect((await post('documents_evil')).status).toBe(400);
+    expect((await post('documents')).status).toBe(200);
+    // GET is allowlisted too — app_state rows are not a free-form read API.
+    expect((await app(new Request('http://localhost/api/state?key=evil'))).status).toBe(400);
+    expect((await app(new Request('http://localhost/api/state?key=sql:doc-1'))).status).toBe(200);
+    // A '/' in the session id could forge writable keys of shape session:connId/db.
+    const slashy = await app(new Request('http://localhost/api/state?key=documents', { headers: { 'x-tern-session': 'a/b' } }));
+    expect(slashy.status).toBe(400);
   } finally { db.close(); }
 });

@@ -72,6 +72,10 @@ describe("detectDataSourceInfo", () => {
     expect(info.capabilities!.search).toBe(true);
     expect(info.capabilities!.modules).toBe(true);
   });
+  test("older RediSearch reports as name=ft", () => {
+    const info = detectDataSourceInfo(redis72 + "\r\n# Modules\r\nmodule:name=ft,ver=10007,api=1");
+    expect(info.capabilities!.search).toBe(true);
+  });
   test("unknown server yields unknown flavor and no capabilities", () => {
     const info = detectDataSourceInfo("# Server\r\nfoo:bar");
     expect(info.flavor).toBe("unknown");

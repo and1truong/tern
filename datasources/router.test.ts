@@ -66,6 +66,19 @@ describe("datasource router", () => {
     expect(await res.json()).toMatchObject({ flavor: "redis" });
   });
 
+  test("/test treats an empty database like an absent one", async () => {
+    let seen: unknown = "unset";
+    const { driver } = fakeDriver({ test: async (config) => { seen = config.database; return INFO; } });
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    const res = await router.route(makeRequest("/test", { driver: "redis", url: "redis://h/5", database: "" }));
+    expect(res.status).toBe(200);
+    // "" means "no override" — the driver's sessionUrl must preserve the
+    // URL's embedded db instead of resetting to db 0.
+    expect(seen).toBeUndefined();
+  });
+
   test("/session caches the session across calls", async () => {
     const { driver, connectCount } = fakeDriver();
     const registry = createDriverRegistry();
@@ -93,7 +106,7 @@ describe("datasource router", () => {
     const router = makeDatasourceRouter(profiles, registry);
     await router.route(makeRequest("/session", { connId: "p1" }));
     const denied = await router.route(makeRequest("/command", { connId: "p1", command: "SET k v" }, () => false));
-    expect(denied.status).toBe(400);
+    expect(denied.status).toBe(403);
     expect(((await denied.json()) as { code: string }).code).toBe("not_read_only");
     const allowed = await router.route(makeRequest("/command", { connId: "p1", command: "SET k v" }, () => true));
     expect(allowed.status).toBe(200);
@@ -111,13 +124,50 @@ describe("datasource router", () => {
     expect((await op.json())).toMatchObject({ ok: true });
   });
 
+  test("/scan rejects oversized match and type rather than truncating", async () => {
+    const { driver } = fakeDriver();
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    // A chopped glob would silently scan a different key set than requested.
+    const long = await router.route(makeRequest("/scan", { connId: "p1", cursor: "0", match: "x".repeat(257) }));
+    expect(long.status).toBe(400);
+    expect(((await long.json()) as { code: string }).code).toBe("invalid_change");
+    const ok = await router.route(makeRequest("/scan", { connId: "p1", cursor: "0", match: "k*".padEnd(256, "*"), type: "hash" }));
+    expect(ok.status).toBe(200);
+    // An empty match would otherwise be silently dropped into an
+    // unfiltered SCAN; an empty cursor means the first page like /key.
+    const emptyMatch = await router.route(makeRequest("/scan", { connId: "p1", cursor: "0", match: "" }));
+    expect(emptyMatch.status).toBe(400);
+    const emptyCursor = await router.route(makeRequest("/scan", { connId: "p1", cursor: "" }));
+    expect(emptyCursor.status).toBe(200);
+    // count must be a real number — a string is rejected, not coerced.
+    const stringCount = await router.route(makeRequest("/scan", { connId: "p1", cursor: "0", count: "50" }));
+    expect(stringCount.status).toBe(400);
+  });
+
+  test("/key/op allows empty field/member strings (legal in Redis)", async () => {
+    const { driver } = fakeDriver();
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    for (const op of [
+      { op: "hashDelete", key: "h", fields: [""] },
+      { op: "setRemove", key: "s", members: [""] },
+      { op: "hashSet", key: "h", field: "", value: "v" },
+    ]) {
+      const res = await router.route(makeRequest("/key/op", { connId: "p1", op }));
+      expect(res.status, JSON.stringify(op)).toBe(200);
+    }
+  });
+
   test("/key/op requires an explicitly writable session", async () => {
     const { driver } = fakeDriver();
     const registry = createDriverRegistry();
     registry.register(driver);
     const router = makeDatasourceRouter(profiles, registry);
     const denied = await router.route(makeRequest("/key/op", { connId: "p1", op: { op: "delete", keys: ["a"] } }, () => false));
-    expect(denied.status).toBe(400);
+    expect(denied.status).toBe(403);
     expect(((await denied.json()) as { code: string }).code).toBe("not_read_only");
   });
 
@@ -130,6 +180,42 @@ describe("datasource router", () => {
     await router.route(makeRequest("/session", { connId: "p1" }));
     await router.invalidate("p1");
     expect(closed).toBe(true);
+  });
+
+  test("a `database` request field becomes a suffixed urlKey that invalidate sweeps", async () => {
+    let closed = 0;
+    const { driver } = fakeDriver({ session: { close: async () => { closed++; } } });
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    const res = await router.route(makeRequest("/session", { connId: "p1", database: "1" }));
+    expect(res.status).toBe(200);
+    await router.invalidate("p1");
+    expect(closed).toBe(1);
+  });
+
+  test("a profile row with driver sqlite never reaches the sqlite driver", async () => {
+    const { driver } = fakeDriver();
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    registry.register(makeSqliteDriver());
+    const sqliteProfiles: Profiles = {
+      get: async (id) => id === "sq" ? { id: "sq", driver: "sqlite" } : null,
+      resolveUrl: async () => "/tmp/probe.db",
+    };
+    const router = makeDatasourceRouter(sqliteProfiles, registry);
+    const res = await router.route(makeRequest("/session", { connId: "sq" }));
+    expect(res.status).toBe(400);
+  });
+
+  test("/test refuses the sqlite driver — files open through /open only", async () => {
+    const { driver } = fakeDriver();
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    registry.register(makeSqliteDriver());
+    const router = makeDatasourceRouter(profiles, registry);
+    const res = await router.route(makeRequest("/test", { driver: "sqlite", url: "/tmp/probe.db" }));
+    expect(res.status).toBe(400);
   });
 
   test("unknown driver id is 404 and unknown profile is 404", async () => {
@@ -165,7 +251,7 @@ describe("session lifecycle on errors", () => {
     await router.route(makeRequest("/session", { connId: "p1" }));
 
     const denied = await router.route(makeRequest("/command", { connId: "p1", command: "SET k v" }, () => false));
-    expect(denied.status).toBe(400);
+    expect(denied.status).toBe(403);
     // A read-only rejection is logical: the healthy session stays cached.
     expect(closed).toBe(0);
     failMode = "none";
@@ -181,6 +267,76 @@ describe("session lifecycle on errors", () => {
     await router.route(makeRequest("/command", { connId: "p1", command: "GET k" }, () => true));
     expect(connectCount()).toBe(2);
   });
+
+  test("concurrent first requests share one in-flight connect", async () => {
+    let resolveConnect: (session: DriverSession) => void = () => {};
+    const gate = new Promise<DriverSession>(resolve => { resolveConnect = resolve; });
+    let connectCount = 0;
+    const base = fakeDriver();
+    const driver: DataSourceDriver = {
+      ...base.driver,
+      async connect() {
+        connectCount++;
+        return gate;
+      },
+    };
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    const first = router.route(makeRequest("/session", { connId: "p1" }));
+    const second = router.route(makeRequest("/scan", { connId: "p1", cursor: "0" }));
+    await new Promise(r => setTimeout(r, 0));
+    resolveConnect(await base.driver.connect({ url: "redis://localhost:6379" }));
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(connectCount).toBe(1);
+  });
+
+  test("a failed connect is not cached; the next request retries", async () => {
+    let connectCount = 0;
+    const base = fakeDriver();
+    const driver: DataSourceDriver = {
+      ...base.driver,
+      async connect() {
+        connectCount++;
+        if (connectCount === 1) throw new DbError("sql", "connection refused");
+        return base.driver.connect({ url: "redis://localhost:6379" });
+      },
+    };
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    const failed = await router.route(makeRequest("/session", { connId: "p1" }));
+    expect(failed.status).toBe(400);
+    const retried = await router.route(makeRequest("/session", { connId: "p1" }));
+    expect(retried.status).toBe(200);
+    expect(connectCount).toBe(2);
+  });
+
+  test("command_error rejections keep the healthy session", async () => {
+    let closed = 0;
+    const { driver, connectCount } = fakeDriver({
+      session: {
+        explorer: {
+          async scan() { throw new DbError("command_error", "NOPERM denied"); },
+          async inspect(key) { return { key, type: "none", ttlSeconds: -2, memoryBytes: null, size: null, value: { kind: "none" } }; },
+          async keyOp() { return { ok: true } as never; },
+        },
+        close: async () => { closed++; },
+      },
+    });
+    const registry = createDriverRegistry();
+    registry.register(driver);
+    const router = makeDatasourceRouter(profiles, registry);
+    const denied = await router.route(makeRequest("/scan", { connId: "p1", cursor: "0" }));
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { code: string }).code).toBe("command_error");
+    expect(closed).toBe(0);
+    // Same session serves the next request — no reconnect happened.
+    await router.route(makeRequest("/scan", { connId: "p1", cursor: "0" }));
+    expect(connectCount()).toBe(1);
+  });
 });
 
 test("/key/op expire requires a positive second count", async () => {
@@ -193,6 +349,47 @@ test("/key/op expire requires a positive second count", async () => {
     expect(res.status, String(seconds)).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/positive/);
   }
+});
+
+test("/key/op rejects malformed operation bodies before dispatch", async () => {
+  let dispatched = 0;
+  const { driver } = fakeDriver({
+    session: {
+      explorer: {
+        async scan() { return { cursor: "0", keys: [] }; },
+        async inspect(key) { return { key, type: "none", ttlSeconds: -2, memoryBytes: null, size: null, value: { kind: "none" } }; },
+        async keyOp(op) { dispatched++; return { ok: true, op: (op as { op: string }).op } as never; },
+      },
+    },
+  });
+  const registry = createDriverRegistry();
+  registry.register(driver);
+  const router = makeDatasourceRouter(profiles, registry);
+  const malformed: unknown[] = [
+    // A string would char-split into SREM members a,d,m,i,n at the driver.
+    { op: "setRemove", key: "myset", members: "admin" },
+    { op: "setAdd", key: "s", members: "x" },
+    { op: "hashDelete", key: "h", fields: "f" },
+    { op: "zsetRemove", key: "z", members: [] },
+    { op: "delete", keys: "k" },
+    { op: "delete", keys: [] },
+    { op: "rename", from: "a" },
+    { op: "zsetAdd", key: "z", member: "m", score: "high" },
+    { op: "hashSet", key: "h", field: "f" },
+    // Values are capped too — a workbench key edit must not accept a
+    // multi-hundred-MB body.
+    { op: "setString", key: "k", value: "x".repeat(1024 * 1024 + 1) },
+    { op: "listSet", key: "l", index: 1.5, value: "v" },
+    { op: "persist" },
+    { op: "teleport", key: "k" },
+    "not-an-object",
+  ];
+  for (const op of malformed) {
+    const res = await router.route(makeRequest("/key/op", { connId: "p1", op }));
+    expect(res.status, JSON.stringify(op)).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_change");
+  }
+  expect(dispatched).toBe(0);
 });
 
 // Relational dispatch: SQLite files resolve path-keyed sessions through the
@@ -221,7 +418,7 @@ describe("relational routes", () => {
 
   test("query rejects write verbs as not_read_only", async () => {
     const res = await router.route(makeRequest("/query", { path, sql: "DELETE FROM users" }, writable));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     expect(((await res.json()) as { code: string }).code).toBe("not_read_only");
   });
 
@@ -229,7 +426,7 @@ describe("relational routes", () => {
     const denied = await router.route(makeRequest("/exec", { path, sql: "CREATE TABLE t(a)", allowWrite: true }, () => false));
     expect(denied.status).toBe(403);
     const batch = await router.route(makeRequest("/exec", { path, sql: "CREATE TABLE t(a)" }, writable));
-    expect(batch.status).toBe(400);
+    expect(batch.status).toBe(403);
     expect(((await batch.json()) as { code: string }).code).toBe("not_read_only");
     const allowed = await router.route(makeRequest("/exec", { path, sql: "CREATE TABLE t(a)", allowWrite: true }, writable));
     expect(allowed.status).toBe(200);

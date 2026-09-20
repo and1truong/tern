@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openAppDatabase } from "./appDatabase.ts";
@@ -40,9 +40,31 @@ test("Tern credentials win and failed migration leaves legacy credentials intact
   const old = new Map([['connection:x', 'legacy-fixture']]);
   const current = new Map([['connection:x', 'tern-fixture']]);
   expect(await withLegacyCredentials(secrets(current), secrets(old)).get('connection:x') === current.get('connection:x')).toBe(true);
+  // Copy-back failure is tolerated — the legacy credential still resolves.
   const failing = { ...secrets(), set: async () => { throw new Error('locked'); } };
-  await expect(withLegacyCredentials(failing, secrets(old)).get('connection:x')).rejects.toThrow('locked');
+  expect(await withLegacyCredentials(failing, secrets(old)).get('connection:x')).toBe('legacy-fixture');
   expect(old.has('connection:x')).toBe(true);
+});
+
+test("the legacy copy-back cannot clobber a concurrent credential write", async () => {
+  const current = new Map<string, string>();
+  const old = new Map([['connection:c', 'legacy-fixture']]);
+  const wrapped = withLegacyCredentials(secrets(current), secrets(old));
+  // get() copies the legacy value back — a save issued in the same tick is
+  // serialized behind it, so the newer credential wins instead of being
+  // overwritten by the stale copy-back.
+  const [got] = await Promise.all([wrapped.get('connection:c'), wrapped.set('connection:c', 'new-fixture')]);
+  expect(got).toBe('legacy-fixture');
+  expect(current.get('connection:c')).toBe('new-fixture');
+});
+
+test("a corrupt legacy file is skipped, never a startup failure", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tern-migration-"));
+  const source = join(dir, "legacy.sqlite");
+  const target = join(dir, "tern", "app.sqlite");
+  writeFileSync(source, "not a sqlite file at all");
+  expect(() => migrateAppDatabase(source, target)).not.toThrow();
+  expect(existsSync(target)).toBe(false);
 });
 
 test("plaintext legacy rows never replace an existing Tern credential", async () => {

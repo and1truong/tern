@@ -23,7 +23,9 @@ function entries(values: Record<string, unknown>, label: string): [string, unkno
 
 function whereSql(change: Extract<RowChange, { kind: "update" | "delete" }>, params: unknown[]): string {
   const key = entries(change.key, "row key");
-  const expected = Object.entries(change.expected).filter(([column]) => !(column in change.key));
+  // Own-property check: `in` walks the prototype chain and would silently
+  // drop an expected column named "constructor"/"toString" from the WHERE.
+  const expected = Object.entries(change.expected).filter(([column]) => !Object.hasOwn(change.key, column));
   return [...key, ...expected].map(([column, value]) => {
     params.push(decodeDbValue(value));
     // `IS` is SQLite's null-safe equality and Postgres dispatch rewrites this
@@ -55,6 +57,9 @@ export function compileRowChange(change: RowChange): RowChangeStatement {
       params,
     };
   }
+  // Anything else must be a delete — an unrecognized kind (the wire payload
+  // is only cast, not validated) must fail rather than compile a DELETE.
+  if ((change as RowChange).kind !== "delete") throw new DbError("invalid_change", `unknown row change kind "${String(change.kind)}"`);
   const where = whereSql(change, params);
   return { kind: change.kind, sql: `DELETE FROM ${relation} WHERE ${where}`, params };
 }

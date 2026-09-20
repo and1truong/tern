@@ -45,10 +45,12 @@ test.skipIf(!url)('standalone PostgreSQL profile, database selection, read-only,
     const insights = await (await app(new Request(`http://localhost/api/datasource/insights?${query}`))).json();
     expect(insights.tables.some((t: { name: string }) => t.name === 'public.tern_api_test')).toBe(true);
     const cancel = new AbortController();
-    const running = post('datasource/query', { ...source, sql: 'SELECT pg_sleep(20)' }, cancel.signal);
+    // pg_sleep is denylisted (403) — a heavy read exercises cancellation.
+    const slow = 'SELECT count(*) FROM generate_series(1, 500000000)';
+    const running = post('datasource/query', { ...source, sql: slow }, cancel.signal);
     setTimeout(() => cancel.abort(), 100);
     expect((await running).status).toBe(408);
-    expect((await post('datasource/query', { ...source, sql: 'SELECT pg_sleep(20)', timeoutMs: 1000 })).status).toBe(408);
+    expect((await post('datasource/query', { ...source, sql: slow, timeoutMs: 1000 })).status).toBe(408);
   } finally {
     await post('datasource/exec', { ...source, sql: 'DROP TABLE IF EXISTS tern_api_test', allowWrite: true });
     db.close();

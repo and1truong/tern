@@ -79,7 +79,7 @@ async function verify(name: string, url: string, expectFlavor: "redis" | "valkey
 
     // Key ops: expire, persist, rename, edit, delete.
     check(`${name}: expire`, (await explorer.keyOp({ op: "expire", key: keys.s, seconds: 999 })).n === 1);
-    check(`${name}: TTL set`, (await explorer.inspect(keys.s)).ttlSeconds > 0);
+    check(`${name}: TTL set`, ((await explorer.inspect(keys.s)).ttlSeconds ?? -1) > 0);
     check(`${name}: persist`, (await explorer.keyOp({ op: "persist", key: keys.s })).n === 1);
     check(`${name}: TTL cleared`, (await explorer.inspect(keys.s)).ttlSeconds === -1);
     check(`${name}: setString keeps hash-less value`, (await explorer.keyOp({ op: "setString", key: keys.s, value: "edited" })).ok);

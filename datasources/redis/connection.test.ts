@@ -23,6 +23,8 @@ describe("validateRedisUrl", () => {
     expect(() => validateRedisUrl("redis://")).toThrow(/host/i);
     expect(() => validateRedisUrl("redis://h/abc")).toThrow(/database/i);
     expect(() => validateRedisUrl("redis://h/?foo=bar")).toThrow(/option/i);
+    // A fragment silently rides along into sessionUrl otherwise.
+    expect(() => validateRedisUrl("redis://h/0#frag")).toThrow(/fragment/i);
   });
 });
 
@@ -31,7 +33,25 @@ describe("sessionUrl", () => {
     expect(sessionUrl("redis://:pw@h:6379", "3")).toBe("redis://:pw@h:6379/3");
     expect(sessionUrl("redis://:pw@h:6379/9", "0")).toBe("redis://:pw@h:6379");
     expect(sessionUrl("redis://h:6379", undefined)).toBe("redis://h:6379");
+    // No override preserves the db index embedded in the profile URL.
+    expect(sessionUrl("redis://:pw@h:6379/5", undefined)).toBe("redis://:pw@h:6379/5");
+    expect(sessionUrl("redis://:pw@h:6379/5", "2")).toBe("redis://:pw@h:6379/2");
   });
+  test("a username-only URL stays username-only — no empty password", () => {
+    expect(sessionUrl("redis://user@h:6379", "2")).toBe("redis://user@h:6379/2");
+  });
+  test("percent-encoded credentials survive the rebuild unchanged", () => {
+    // parsed.username/password keep their percent-encoding, so raw
+    // re-interpolation round-trips them correctly.
+    expect(sessionUrl("redis://:p%2Fss@h:6379", "1")).toBe("redis://:p%2Fss@h:6379/1");
+    expect(sessionUrl("redis://u%40x:p@h:6379", undefined)).toBe("redis://u%40x:p@h:6379");
+  });
+});
+
+test("buildRedisUrl refuses URL-significant characters in the host", () => {
+  expect(() => buildRedisUrl({ host: "a@b" })).toThrow(/host/i);
+  expect(() => buildRedisUrl({ host: "a b" })).toThrow(/host/i);
+  expect(() => buildRedisUrl({ host: "a/b" })).toThrow(/host/i);
 });
 
 test("brackets IPv6 hosts", () => {

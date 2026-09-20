@@ -1,7 +1,7 @@
 // Deterministic command-line completion for the Redis console: command names
 // at token 0, then literal enum tokens, known key names, and per-position
 // argument hints. Pure metadata — works offline, no AI.
-import { commandCatalog, lookupCommand, type CommandArgSpec, type CommandDoc } from "./catalog.ts";
+import { argRoles, commandCatalog, lookupCommand, type CommandArgSpec, type CommandDoc } from "./catalog.ts";
 import { tokenizeCommand } from "./resp.ts";
 
 export interface Completion {
@@ -16,10 +16,14 @@ export interface Completion {
 function splitPartial(input: string): { tokens: string[]; prefix: string; atSpace: boolean } {
   const atSpace = /\s$/.test(input);
   let tokens: string[];
+  let fallback = false;
   try { tokens = tokenizeCommand(input); }
-  catch { tokens = input.trim().split(/\s+/).filter(Boolean); }
+  catch { tokens = input.trim().split(/\s+/).filter(Boolean); fallback = true; }
   if (atSpace) return { tokens, prefix: "", atSpace };
-  const prefix = tokens.at(-1) ?? "";
+  // The token that broke quoting keeps its dangling opener in the fallback —
+  // strip it so `GET "use` still completes keys starting with "use".
+  const last = tokens.at(-1) ?? "";
+  const prefix = fallback ? last.replace(/^["']/, "") : last;
   return { tokens: tokens.slice(0, -1), prefix, atSpace };
 }
 
@@ -56,7 +60,7 @@ export function completeCommand(input: string, opts: { keys?: string[]; max?: nu
       }
     }
   }
-  if (hasKeyArgAt(doc, argIndex) && opts.keys) {
+  if (hasKeyArgAt(doc, tokens.slice(1)) && opts.keys) {
     for (const key of opts.keys) {
       if (key.toLowerCase().startsWith(lower)) completions.push({ label: key, kind: "key", insert: quoteKey(key) });
     }
@@ -101,14 +105,21 @@ function enumSpecsAt(doc: CommandDoc, argIndex: number): CommandArgSpec[] {
   const start = specs.indexOf(active);
   for (let i = start + 1; i < specs.length; i++) {
     const spec = specs[i]!;
-    if (!spec.optional || !spec.enum) break;
-    result.push(spec);
+    // Later optional flags still complete (SET's NX/GET after its seconds);
+    // a required spec ends the free-flag zone.
+    if (!spec.optional) break;
+    if (spec.enum) result.push(spec);
   }
   return result;
 }
 
-function hasKeyArgAt(doc: CommandDoc, argIndex: number): boolean {
-  const spec = specForPosition(doc, argIndex);
+// The spec the NEXT argument fills, resolved through argRoles so flags,
+// numkeys bounds, and variadic halves (MSET's value position, EVAL's script
+// args, XREAD's STREAMS keys) are all classified correctly. The sentinel
+// stands in for the token being typed.
+function hasKeyArgAt(doc: CommandDoc, typedArgs: string[]): boolean {
+  const sentinel = "\0partial";
+  const spec = argRoles(doc, [...typedArgs, sentinel]).find(r => r.token === sentinel)?.spec;
   return spec?.type === "key";
 }
 
@@ -118,7 +129,7 @@ export function expectsKeyArg(input: string): boolean {
   const { tokens } = splitPartial(input);
   if (!tokens.length) return false;
   const doc = lookupCommand(tokens[0]!);
-  return doc !== null && hasKeyArgAt(doc, tokens.length - 1);
+  return doc !== null && hasKeyArgAt(doc, tokens.slice(1));
 }
 
 export function specForPosition(doc: CommandDoc, argIndex: number): CommandArgSpec | null {

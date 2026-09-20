@@ -46,7 +46,8 @@ export function detectDataSourceInfo(raw: string | Record<string, unknown>): Dat
     functions: since(version, 7),
     cluster: sections.cluster_enabled === "1",
     modules: modules.length > 0,
-    search: modules.some(m => m.includes("search")),
+    // Older RediSearch reports as name=ft, not search*.
+    search: modules.some(m => /^(ft|search|searchlight)/i.test(m)),
   };
   let totalKeys = 0;
   for (const [key, value] of Object.entries(sections)) {

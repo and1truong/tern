@@ -13,8 +13,16 @@ export function openAppDatabase(path?: string) {
   }
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path, { create: true });
-  if (path !== ":memory:") chmodSync(path, 0o600);
+  // The WAL/SHM siblings are created under the process umask — lock them
+  // down alongside the main file.
+  if (path !== ":memory:") for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    try { chmodSync(file, 0o600); } catch { /* sibling may not exist yet */ }
+  }
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON");
+  // The WAL/SHM files appear when the journal engages — chmod them now.
+  if (path !== ":memory:") for (const file of [`${path}-wal`, `${path}-shm`]) {
+    try { chmodSync(file, 0o600); } catch { /* still absent is fine */ }
+  }
   db.exec("CREATE TABLE IF NOT EXISTS app_migrations (version INTEGER PRIMARY KEY)");
   db.transaction(() => {
     for (const migration of migrations) {

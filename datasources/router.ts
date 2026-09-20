@@ -45,9 +45,13 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
     // same way, so both layers always agree on which source a request means.
     const connId = typeof body.connId === "string" ? body.connId : "";
     if (connId) {
-      const database = body.database === undefined ? "" : String(body.database);
+      // `null`, `undefined` and `""` all mean "no database" — the app's key
+      // computation uses `?? ""`, so the two layers must agree here. An
+      // explicit "" must not reach sessionUrl either: it would reset a
+      // profile whose URL selects db 5 back to db 0 under the same key.
+      const database = body.database == null || body.database === "" ? "" : String(body.database);
       if (database.length > 64) throw new DbError("invalid_change", "Invalid database");
-      return { connId, key: `${connId}/${database}`, database: body.database === undefined ? undefined : String(body.database), path: undefined };
+      return { connId, key: `${connId}/${database}`, database: body.database == null || body.database === "" ? undefined : String(body.database), path: undefined };
     }
     if (typeof body.path === "string" && body.path) {
       return { connId: "", key: body.path, database: undefined as string | undefined, path: body.path };
@@ -59,7 +63,7 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
     const key = path ?? `${connId}/${database ?? ""}`;
     const cached = sessions.get(key);
     if (cached) return cached;
-    const connecting = (async () => {
+    const connect = async (): Promise<DriverSession> => {
       let driver: DataSourceDriver;
       let url: string;
       if (path !== undefined) {
@@ -71,12 +75,24 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
         const profile = await profiles.get(connId);
         if (!profile) throw new DbError("not_found", "Unknown connection");
         driver = requireDriver(registry, profile.driver);
+        // A profile row must never reach the sqlite driver — /open's file
+        // gate (realpath, opened-set, app-db guard) only applies to paths.
+        if (driver.id === "sqlite") throw new DbError("invalid_change", "SQLite files open through the file picker");
         const resolved = await profiles.resolveUrl(connId);
         if (!resolved) throw new DbError("not_found", `No stored url for connection "${profile.id}"`);
         url = resolved;
       }
-      return catchDb(() => driver.connect({ url, database }));
-    })();
+      const session = await catchDb(() => driver.connect({ url, database }));
+      // invalidate() may have swept this key while the connect was in
+      // flight — the session can never be served again, so close it rather
+      // than leak the transport.
+      if (sessions.get(key) !== connecting) {
+        await session.close().catch(() => {});
+        throw new DbError("not_found", "Connection was removed");
+      }
+      return session;
+    };
+    const connecting = connect();
     sessions.set(key, connecting);
     // A failed connect must not poison the cache for later requests.
     connecting.catch(() => { if (sessions.get(key) === connecting) sessions.delete(key); });
@@ -127,8 +143,14 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
         switch (req.path) {
           case "/test": {
             const driver = requireDriver(registry, typeof body.driver === "string" ? body.driver : "");
+            // SQLite files open through /open only — /test must not probe
+            // arbitrary filesystem paths or the app database itself.
+            if (driver.id === "sqlite") return fail("SQLite files open through the file picker", 400);
             const url = str(body.url, "connection url", 1, 1024);
-            const database = body.database === undefined ? undefined : str(body.database, "database", 0, 64);
+            // "" means "no database override", matching connKey — sessionUrl
+            // must preserve the URL's embedded db, not reset to db 0.
+            const database = body.database === undefined || body.database === "" ? undefined : str(body.database, "database", 0, 64);
+            driver.validateUrl(url);
             return Response.json(await catchDb(() => driver.test({ url, database })));
           }
           case "/session": {
@@ -202,23 +224,26 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
             });
           }
           case "/scan": {
-            const cursor = str(body.cursor ?? "0", "cursor", 1, 64);
+            const cursor = body.cursor === undefined || body.cursor === "" ? "0" : str(body.cursor, "cursor", 1, 64);
             if (!/^\d+$/.test(cursor)) throw new DbError("invalid_change", "Invalid cursor");
-            const count = body.count === undefined ? undefined : Number(body.count);
-            if (count !== undefined && (!Number.isFinite(count) || count < 1 || count > 1000)) throw new DbError("invalid_change", "Invalid count");
+            const count = num(body.count);
+            if (body.count !== undefined && (count === undefined || count < 1 || count > 1000)) throw new DbError("invalid_change", "Invalid count");
             return await withSession(body, async (session) => {
               if (!session.explorer) throw new DbError("not_found", "This source has no key explorer");
               return session.explorer.scan({
                 cursor,
-                match: typeof body.match === "string" ? body.match.slice(0, 256) : undefined,
+                // Reject rather than truncate or drop — a changed glob or a
+                // silently discarded match scans a different key set than
+                // the caller asked for.
+                match: body.match === undefined ? undefined : str(body.match, "match", 1, 256),
                 count,
-                type: typeof body.type === "string" ? body.type.slice(0, 64) : undefined,
+                type: body.type === undefined ? undefined : str(body.type, "type", 1, 64),
               });
             });
           }
           case "/key": {
-            const key = str(body.key, "key", 1, 512);
-            const cursor = body.cursor === undefined ? undefined : str(body.cursor, "cursor", 0, 128);
+            const key = str(body.key, "key", 1, 64 * 1024);
+            const cursor = body.cursor === undefined || body.cursor === "" ? undefined : str(body.cursor, "cursor", 1, 128);
             return await withSession(body, async (session) => {
               if (!session.explorer) throw new DbError("not_found", "This source has no key explorer");
               return session.explorer.inspect(key, cursor);
@@ -227,14 +252,7 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           case "/key/op": {
             const op = body.op;
             if (!op || typeof op !== "object") throw new DbError("invalid_change", "Invalid key operation");
-            // EXPIRE with 0 or a negative value deletes the key immediately —
-            // keep that behind the explicit delete flow, never the expire one.
-            if ((op as { op?: string }).op === "expire") {
-              const seconds = (op as { seconds?: unknown }).seconds;
-              if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 1) {
-                throw new DbError("invalid_change", "Expire requires a positive number of seconds");
-              }
-            }
+            validateKeyOp(op as Record<string, unknown>);
             // Every key mutation is a write: require the enabled-write session.
             const { key: opKey } = connKey(body);
             if (!req.writable(opKey)) throw new DbError("not_read_only", "Connection is read-only");
@@ -262,6 +280,44 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
   };
 }
 
+// Shape-check a key operation before it reaches the driver — a malformed op
+// (e.g. `members: "admin"` char-splitting into SREM arguments) must fail here,
+// never mutate members the caller never named.
+function validateKeyOp(op: Record<string, unknown>): void {
+  // Redis keys, fields and members can far exceed a short buffer — RESP bulk
+  // strings carry them, so the cap is only a sanity bound.
+  const key = (v: unknown): v is string => typeof v === "string" && v.length >= 1 && v.length <= 64 * 1024;
+  const keys = (v: unknown): v is string[] => Array.isArray(v) && v.length >= 1 && v.length <= 100 && v.every(key);
+  // Fields and members may legally be "" in Redis — unlike key names they
+  // round-trip empty, so only the size bound applies.
+  const items = (v: unknown): v is string[] => Array.isArray(v) && v.length >= 1 && v.length <= 100 && v.every(i => typeof i === "string" && i.length <= 64 * 1024);
+  // Values are capped too — a multi-hundred-MB body has no business flowing
+  // into a workbench key edit.
+  const value = (v: unknown): v is string => typeof v === "string" && v.length <= 1024 * 1024;
+  const bad = (): never => { throw new DbError("invalid_change", `Invalid "${String(op.op)}" key operation`); };
+  switch (op.op) {
+    case "rename": if (!key(op.from) || !key(op.to)) bad(); break;
+    case "delete": if (!keys(op.keys)) bad(); break;
+    // EXPIRE with 0 or a negative value deletes the key immediately — keep
+    // that behind the explicit delete flow, never the expire one. Non-safe
+    // integers would stringify into forms Redis cannot parse (1e21 → "1e+21").
+    case "expire":
+      if (!key(op.key)) bad();
+      if (typeof op.seconds !== "number" || !Number.isSafeInteger(op.seconds) || op.seconds < 1) {
+        throw new DbError("invalid_change", "Expire requires a positive integer number of seconds");
+      }
+      break;
+    case "persist": if (!key(op.key)) bad(); break;
+    case "setString": if (!key(op.key) || !value(op.value)) bad(); break;
+    case "hashSet": if (!key(op.key) || typeof op.field !== "string" || op.field.length > 64 * 1024 || !value(op.value)) bad(); break;
+    case "hashDelete": if (!key(op.key) || !items(op.fields)) bad(); break;
+    case "setAdd": case "setRemove": case "zsetRemove": if (!key(op.key) || !items(op.members)) bad(); break;
+    case "zsetAdd": if (!key(op.key) || typeof op.member !== "string" || op.member.length > 64 * 1024 || typeof op.score !== "number" || !Number.isFinite(op.score)) bad(); break;
+    case "listSet": if (!key(op.key) || typeof op.index !== "number" || !Number.isSafeInteger(op.index) || !value(op.value)) bad(); break;
+    default: bad();
+  }
+}
+
 function requireDriver(registry: DriverRegistry, id: string): DataSourceDriver {
   const driver = registry.get(id);
   if (!driver) throw new DbError("not_found", `Unknown driver "${id}"`);
@@ -272,6 +328,6 @@ async function catchDb<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); }
   catch (error) {
     if (error instanceof DbError) throw error;
-    throw new DbError("sql", error instanceof Error ? error.message.replace(/rediss?:\/\/\S+/gi, "[connection]") : "connection failed");
+    throw new DbError("sql", error instanceof Error ? error.message.replace(/(?:rediss?|postgres(?:ql)?):\/\/\S+/gi, "[connection]") : "connection failed");
   }
 }

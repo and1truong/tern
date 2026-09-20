@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Notice from "./Notice.tsx";
 import type { DbTable, RowChangeStatement } from "../shared/types.ts";
 import { tableLabel } from "../shared/sqlIdentifiers.ts";
@@ -6,11 +6,24 @@ import { coerceCellValue } from "../shared/dataGrid.ts";
 import { parseCsv } from "../shared/dataTransfer.ts";
 import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../shared/binaryValues.ts";
 
+// These dialogs render inside document components, outside the workbench's
+// modal bookkeeping — a mounted dialog still owns the keyboard, so global ⌘
+// shortcuts must not mutate documents behind it.
+let openDialogs = 0;
+export const anyDialogOpen = () => openDialogs > 0;
+function useDialogOpen(): void {
+  useEffect(() => {
+    openDialogs++;
+    return () => { openDialogs--; };
+  }, []);
+}
+
 export function InsertRowModal({ table, onClose, onAdd }: {
   table: DbTable;
   onClose: () => void;
   onAdd: (values: Record<string, unknown>) => void;
 }) {
+  useDialogOpen();
   const [values, setValues] = useState<Record<string, string>>({});
   const writableColumns = table.columns.filter((column) => !column.generated && column.identityGeneration !== "ALWAYS");
   const submit = () => {
@@ -62,6 +75,7 @@ export function ImportCsvModal({ table, onClose, onStage }: {
   onClose: () => void;
   onStage: (rows: Record<string, unknown>[]) => void;
 }) {
+  useDialogOpen();
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   let preview: ReturnType<typeof parseCsv> | null = null;
@@ -111,6 +125,7 @@ export function ImportCsvModal({ table, onClose, onStage }: {
 }
 
 export function ValueInspector({ column, value, onClose }: { column: string; value: unknown; onClose: () => void }) {
+  useDialogOpen();
   const text = isDbBinaryValue(value)
     ? `Binary value (${binaryByteLength(value).toLocaleString()} bytes)\n\nBase64:\n${value.__ternWire.base64}`
     : (() => {
@@ -141,6 +156,7 @@ export function RowChangesModal({ statements, applying, error, onClose, onApply,
   onClose: () => void;
   onApply: () => void;
 }) {
+  useDialogOpen();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(event) => event.target === event.currentTarget && !applying && onClose()}>
       <div role="dialog" aria-label="Review row changes" className="w-[680px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">

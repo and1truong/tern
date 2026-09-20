@@ -12,10 +12,14 @@ import type {
 } from "../contracts.ts";
 import { detectDataSourceInfo, versionAtLeast } from "./capabilities.ts";
 import { sessionUrl, validateRedisUrl } from "./connection.ts";
-import { blockingTimeoutSeconds, commandCatalog, lookupCommand, type CommandDoc } from "./catalog.ts";
+import { blockingTimeoutSeconds, commandCatalog, isReadAllowed, lookupCommand, MAX_BLOCK_SECONDS, UNSHARED_CLIENT_SUBCOMMANDS, UNSHARED_CONNECTION_COMMANDS, type CommandDoc } from "./catalog.ts";
 import { encodeRESP, tokenizeCommand } from "./resp.ts";
 
 export interface SessionTransport {
+  // Rejections must distinguish server error replies from transport
+  // failures: tag server replies with a `.code` (Bun stamps
+  // ERR_REDIS_SERVER_ERROR). An untagged rejection is treated as a broken
+  // reply stream and the whole session is evicted.
   send(command: string, args: string[]): Promise<unknown>;
   connect(): Promise<void>;
   close(): Promise<void>;
@@ -32,8 +36,10 @@ const defaultFactory: TransportFactory = (url) => {
 };
 
 const CONNECT_TIMEOUT_MS = 10_000;
+const COMMAND_TIMEOUT_MS = 30_000;
 
-export function makeRedisDriver(transportFactory: TransportFactory = defaultFactory, options: { connectTimeoutMs?: number } = {}): DataSourceDriver {
+
+export function makeRedisDriver(transportFactory: TransportFactory = defaultFactory, options: { connectTimeoutMs?: number; commandTimeoutMs?: number } = {}): DataSourceDriver {
   return {
     id: "redis",
     displayName: "Redis / Valkey",
@@ -43,7 +49,7 @@ export function makeRedisDriver(transportFactory: TransportFactory = defaultFact
       const transport = transportFactory(sessionUrl(config.url, config.database));
       try {
         await withTimeout(transport.connect(), options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
-        return await detectInfo(transport);
+        return await detectInfo(transport, options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS);
       } finally {
         await transport.close().catch(() => {});
       }
@@ -52,11 +58,11 @@ export function makeRedisDriver(transportFactory: TransportFactory = defaultFact
       const transport = transportFactory(sessionUrl(config.url, config.database));
       try {
         await withTimeout(transport.connect(), options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
-        const info = await detectInfo(transport);
+        const info = await detectInfo(transport, options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS);
         return {
           info,
-          console: makeConsoleProvider(transport),
-          explorer: makeExplorerProvider(transport, info),
+          console: makeConsoleProvider(transport, options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS),
+          explorer: makeExplorerProvider(transport, info, options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS),
           close: async () => { await transport.close().catch(() => {}); },
         };
       } catch (error) {
@@ -76,43 +82,61 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   });
 }
 
-async function detectInfo(transport: SessionTransport): Promise<DataSourceInfo> {
-  let raw: unknown;
-  try { raw = await transport.send("INFO", []); }
-  catch (error) { throw toDbError(error); }
-  return detectDataSourceInfo(raw as string | Record<string, unknown>);
+// Every send is bounded: a stalled reply would block the strictly-ordered
+// reply stream and wedge the shared session forever. The timeout fires a
+// DbError("timeout") so the router evicts and closes the suspect transport.
+// setTimeout clamps > 2^31-1 ms, so cap first.
+function sendTimed(transport: SessionTransport, command: string, args: string[], ms: number): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new DbError("timeout", `${command} timed out; the session was closed to keep replies in sync`)), Math.min(ms, 0x7FFFFFFF));
+    // Resolve through the microtask queue so a synchronous send() throw also
+    // clears the timer instead of leaving it armed until ms.
+    Promise.resolve().then(() => transport.send(command, args)).then(reply => { clearTimeout(timer); resolve(reply); }, error => { clearTimeout(timer); reject(error); });
+  });
 }
 
-const COMMAND_ERROR_PREFIX = /^(ERR|WRONGTYPE|NOPERM|NOAUTH|WRONGPASS|BUSYGROUP|NOGROUP|MOVED|ASK|CROSSSLOT|TRYAGAIN|EXECABORT|LOADING|BUSY|READONLY|MAXRETRIES|NOSCRIPT|MINVAL|INVALID|SETROLLBACK|OOM|MISCONF|MASTERDOWN|CLUSTERDOWN|BUSYKEY|NOREPLICAS|UNBLOCKED)/i;
+async function detectInfo(transport: SessionTransport, commandTimeoutMs: number): Promise<DataSourceInfo> {
+  let raw: unknown;
+  try { raw = await sendTimed(transport, "INFO", [], commandTimeoutMs); }
+  catch (error) { throw toDbError(error); }
+  // INFO may arrive as bytes — Object.entries over a Uint8Array yields byte
+  // indices, which would silently degrade every capability to false.
+  const decoded = raw instanceof Uint8Array ? new TextDecoder("utf-8", { fatal: false }).decode(raw) : raw;
+  return detectDataSourceInfo(decoded as string | Record<string, unknown>);
+}
+
+// NOAUTH/WRONGPASS are absent on purpose: an unauthenticated session can
+// never recover on its own, so it is treated as a transport failure and
+// evicted rather than retained as a dead session returning err replies.
+const COMMAND_ERROR_PREFIX = /^(ERR|WRONGTYPE|NOPERM|BUSYGROUP|NOGROUP|MOVED|ASK|CROSSSLOT|TRYAGAIN|EXECABORT|LOADING|BUSY|READONLY|MAXRETRIES|NOSCRIPT|MINVAL|SETROLLBACK|OOM|MISCONF|MASTERDOWN|CLUSTERDOWN|BUSYKEY|NOREPLICAS|UNBLOCKED|NOTBUSY)/i;
+
+// Auth failures and protected-mode rejections can never recover on this
+// connection — the session is dead and must be evicted, not kept serving
+// err replies.
+const SESSION_FATAL_PREFIX = /^(NOAUTH|WRONGPASS|DENIED)\b/i;
+
+// A server-side command rejection — as opposed to a transport failure that
+// must evict the session. DbErrors carry their own code (a sendTimed
+// "timeout" must never match the message prefixes below). Bun tags server
+// error replies with ERR_REDIS_SERVER_ERROR; any other explicit .code is a
+// transport-level failure. The message prefixes only cover transports that
+// report server errors as bare Error messages.
+function isCommandError(error: unknown): boolean {
+  if (error instanceof DbError) return error.code === "command_error";
+  const message = error instanceof Error ? error.message : String(error);
+  // Bun stamps every server reply error ERR_REDIS_SERVER_ERROR — auth
+  // failures included — so the session-fatal check must precede the code
+  // shortcut.
+  if (SESSION_FATAL_PREFIX.test(message)) return false;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "ERR_REDIS_SERVER_ERROR") return true;
+  if (typeof code === "string" && code) return false;
+  return COMMAND_ERROR_PREFIX.test(message);
+}
 
 // The console shares one cached transport with the explorer: commands that
 // retarget, re-authenticate, queue, or monopolize that connection are refused
-// (the toolbar db selector is the way to change databases — it opens a
-// dedicated session).
-const UNSHARED_CONNECTION_COMMANDS: Record<string, string> = {
-  SELECT: "use the toolbar database selector instead",
-  SWAPDB: "it swaps databases for every connection on this server",
-  SUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
-  PSUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
-  SSUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
-  RESET: "it resets the shared connection's state for every user of this session",
-  QUIT: "it closes the shared connection for every user of this session",
-  AUTH: "credentials belong to the connection profile, not the console",
-  HELLO: "it re-authenticates or switches protocol on the shared connection",
-  ASKING: "it retargets the shared connection's cluster routing",
-  READONLY: "it sets cluster read flags on the shared connection",
-  READWRITE: "it sets cluster read flags on the shared connection",
-  MONITOR: "it turns the shared connection into an event stream, desyncing every later reply",
-  MULTI: "transactions queue on the shared connection and corrupt concurrent requests",
-  EXEC: "transactions queue on the shared connection and corrupt concurrent requests",
-  DISCARD: "transactions queue on the shared connection and corrupt concurrent requests",
-  WATCH: "transactions queue on the shared connection and corrupt concurrent requests",
-  UNWATCH: "transactions queue on the shared connection and corrupt concurrent requests",
-};
-
-// CLIENT subcommands that corrupt the shared transport (suppressed or push
-// replies) or stall the server. Read subcommands (LIST, INFO, ID, …) run fine.
-const UNSHARED_CLIENT_SUBCOMMANDS = /^(REPLY|TRACKING|PAUSE)$/i;
+// (the lists live in catalog.ts so the linter can warn on the same set).
 
 function toDbError(error: unknown): DbError {
   const message = error instanceof Error ? error.message : String(error);
@@ -127,7 +151,7 @@ function sanitize(message: string): string {
 
 // --- console provider ---
 
-function makeConsoleProvider(transport: SessionTransport): ConsoleProvider {
+function makeConsoleProvider(transport: SessionTransport, commandTimeoutMs: number): ConsoleProvider {
   let merged: CommandDoc[] | null = null;
   return {
     async exec(command: string, ctx: ExecContext): Promise<CommandResult> {
@@ -140,39 +164,65 @@ function makeConsoleProvider(transport: SessionTransport): ConsoleProvider {
       const name = tokens[0]!.toUpperCase();
       const args = tokens.slice(1);
       const doc = lookupCommand(name);
-      if ((!doc || doc.access !== "read") && !ctx.writable) {
-        throw new DbError("not_read_only",
-          doc ? `${name} is a ${doc.access} command; enable writes for this session`
-            : `${name} is not in the command catalog; enable writes to allow unclassified commands`);
-      }
-      if (doc?.blocking && blockingTimeoutSeconds(doc, args) === 0) {
-        return { reply: { t: "err", s: `ERR ${name} with timeout 0 blocks indefinitely; pass a positive timeout in seconds` }, ms: 0 };
-      }
+      // Refusals beat the writable gate — "enable writes" is the wrong hint
+      // for a command that can never run on the shared transport.
       const unshared = UNSHARED_CONNECTION_COMMANDS[name];
       if (unshared) {
         return { reply: { t: "err", s: `ERR ${name} is refused by Tern: ${unshared}` }, ms: 0 };
       }
       if (name === "CLIENT" && UNSHARED_CLIENT_SUBCOMMANDS.test(args[0] ?? "")) {
-        return { reply: { t: "err", s: `ERR CLIENT ${args[0]!.toUpperCase()} is refused by Tern: it corrupts the shared connection's reply stream` }, ms: 0 };
+        return { reply: { t: "err", s: `ERR CLIENT ${args[0]!.toUpperCase()} is refused by Tern: it mutates the shared connection` }, ms: 0 };
       }
+      // SCRIPT DEBUG sets a per-connection LDB flag — the next EVAL on this
+      // shared transport enters the Lua debugger (and SYNC stalls the whole
+      // server), which nobody can drive through send().
+      if (name === "SCRIPT" && /^DEBUG$/i.test(args[0] ?? "")) {
+        return { reply: { t: "err", s: `ERR SCRIPT DEBUG is refused by Tern: it puts the shared connection into the Lua debugger` }, ms: 0 };
+      }
+      if ((!doc || !isReadAllowed(doc, args)) && !ctx.writable) {
+        throw new DbError("not_read_only",
+          doc ? `${name} is a ${doc.access} command; enable writes for this session`
+            : `${name} is not in the command catalog; enable writes to allow unclassified commands`);
+      }
+      // Null means the timeout can't be resolved (e.g. a non-numeric arg) —
+      // the command goes out and the server replies with its own error.
+      const blockSeconds = doc?.blocking ? blockingTimeoutSeconds(doc, args) : null;
+      if (blockSeconds === 0) {
+        return { reply: { t: "err", s: `ERR ${name} with timeout 0 blocks indefinitely; pass a positive timeout in seconds` }, ms: 0 };
+      }
+      // Beyond this the wait would outlive anything the console is good for;
+      // refuse up front rather than parking a reply on the shared transport.
+      if (blockSeconds !== null && blockSeconds > MAX_BLOCK_SECONDS) {
+        return { reply: { t: "err", s: `ERR ${name} timeout exceeds the console maximum of ${MAX_BLOCK_SECONDS} seconds` }, ms: 0 };
+      }
+      // Commands that outlive the timeout abandon a pending reply, which would
+      // desync every later response on this shared transport — the thrown
+      // DbError("timeout") makes the router evict and close the session.
+      const timeoutMs = blockSeconds ? Math.max(blockSeconds * 1000 + 5_000, commandTimeoutMs) : commandTimeoutMs;
       const started = performance.now();
       let reply: unknown;
-      try { reply = await transport.send(name, args); }
+      try { reply = await sendTimed(transport, name, args, timeoutMs); }
       catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (COMMAND_ERROR_PREFIX.test(message)) return { reply: { t: "err", s: message }, ms: performance.now() - started };
+        if (isCommandError(error)) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { reply: { t: "err", s: message }, ms: performance.now() - started };
+        }
         throw toDbError(error);
       }
       return { reply: encodeRESP(reply), ms: performance.now() - started };
     },
     async catalog() {
       if (merged) return merged;
-      let docs = commandCatalog;
+      // Runtime enrichment is optional — only a server-side rejection may
+      // degrade to the built-in catalog, and it is not cached so the next
+      // call retries.
       try {
-        docs = mergeCommandDocs(commandCatalog, await transport.send("COMMAND", ["DOCS"]));
-      } catch { /* runtime enrichment is optional; the built-in catalog stands alone */ }
-      merged = docs;
-      return docs;
+        merged = mergeCommandDocs(commandCatalog, await sendTimed(transport, "COMMAND", ["DOCS"], commandTimeoutMs));
+      } catch (error) {
+        if (!isCommandError(error)) throw toDbError(error);
+        return commandCatalog;
+      }
+      return merged;
     },
   };
 }
@@ -209,17 +259,22 @@ const PAGE_SIZE = 50;
 const STRING_PREVIEW_BYTES = 64_000;
 const STRING_MAX_BYTES = 1_000_000;
 
-function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo): KeyValueExplorerProvider {
+// Transports may return binary replies as Uint8Array — String() on one
+// produces "104,105" instead of decoded text.
+const text = (value: unknown): string =>
+  value instanceof Uint8Array ? new TextDecoder("utf-8", { fatal: false }).decode(value) : String(value);
+
+function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo, commandTimeoutMs: number): KeyValueExplorerProvider {
   const version = info.version;
 
   // Redis command rejections carry the "command_error" code so keyOp can turn
   // them into KeyOpResult errors and the router can tell them apart from
   // transport failures (which evict and close the broken session).
   const send = async (command: string, args: string[]): Promise<unknown> => {
-    try { return await transport.send(command, args); }
+    try { return await sendTimed(transport, command, args, commandTimeoutMs); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (COMMAND_ERROR_PREFIX.test(message)) throw new DbError("command_error", sanitize(message));
+      if (isCommandError(error)) throw new DbError("command_error", sanitize(message));
       throw toDbError(error);
     }
   };
@@ -229,7 +284,9 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
   // still propagate so the router can evict the broken session.
   const number = async (command: string, args: string[]): Promise<number | null> => {
     try {
-      const raw = await transport.send(command, args);
+      const raw = await send(command, args);
+      // A nil reply means "unknown" — Number(null) would silently become 0.
+      if (raw === null || raw === undefined) return null;
       const n = typeof raw === "number" ? raw : Number(raw);
       return Number.isFinite(n) ? n : null;
     } catch (error) {
@@ -240,32 +297,31 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
 
   return {
     async scan(q: ScanQuery): Promise<ScanPage> {
-      if (q.type && !versionAtLeast(version, 6)) throw new DbError("sql", "Type filtering requires Redis 6 or newer");
-      const cursor = /^\d+$/.test(q.cursor) ? q.cursor : "0";
-      const args = [cursor];
+      if (q.type && !versionAtLeast(version, 6)) throw new DbError("invalid_change", "Type filtering requires Redis 6 or newer");
+      if (!/^\d+$/.test(q.cursor)) throw new DbError("invalid_change", "Invalid scan cursor");
+      const args = [q.cursor];
       if (q.match) args.push("MATCH", q.match);
       if (q.count !== undefined) args.push("COUNT", String(Math.min(1000, Math.max(1, Math.floor(q.count)))));
       if (q.type) args.push("TYPE", q.type);
       const raw = await send("SCAN", args);
       if (!Array.isArray(raw) || raw.length < 2 || !Array.isArray(raw[1])) throw new DbError("sql", "Unexpected SCAN reply");
-      const keys = (raw[1] as unknown[]).map(String);
+      const keys = (raw[1] as unknown[]).map(text);
       const typed = await Promise.all(keys.map(async key => {
-        try { return { key, type: String(await transport.send("TYPE", [key])) }; }
+        try { return { key, type: text(await sendTimed(transport, "TYPE", [key], commandTimeoutMs)) }; }
         catch (error) {
           // A per-key TYPE rejection (e.g. ACL) degrades to "unknown" for
           // that key; a transport failure must fail the whole page.
-          const message = error instanceof Error ? error.message : String(error);
-          if (COMMAND_ERROR_PREFIX.test(message)) return { key, type: "unknown" };
-          throw error;
+          if (isCommandError(error)) return { key, type: "unknown" };
+          throw toDbError(error);
         }
       }));
-      return { cursor: String(raw[0]), keys: typed };
+      return { cursor: text(raw[0]), keys: typed };
     },
 
     async inspect(key: string, cursor?: string): Promise<KeyInspection> {
-      const type = String(await send("TYPE", [key]));
+      const type = text(await send("TYPE", [key]));
       const [ttlSeconds, memoryBytes, size] = await Promise.all([
-        number("TTL", [key]).then(n => n ?? -2),
+        number("TTL", [key]),
         number("MEMORY", ["USAGE", key]),
         sizeCommand(type, key).then(n => n ?? null),
       ]);
@@ -278,6 +334,7 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
       const { command, args } = keyOpCommand(op, version);
       try {
         const raw = await send(command, args);
+        if (raw === null || raw === undefined) return { ok: true };
         const n = typeof raw === "number" ? raw : Number(raw);
         return { ok: true, ...(Number.isFinite(n) ? { n } : {}) };
       } catch (error) {
@@ -297,13 +354,22 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
   async function fetchValue(type: string, key: string, cursor?: string): Promise<KeyInspection["value"]> {
     switch (type) {
       case "string": {
-        const length = await number("STRLEN", [key]) ?? 0;
-        if (length > STRING_MAX_BYTES) return { kind: "string", value: "", truncated: true, lengthBytes: length };
-        const raw = await transport.send("GET", [key]);
-        const value = raw === null || raw === undefined ? "" : raw instanceof Uint8Array
-          ? new TextDecoder("utf-8", { fatal: false }).decode(raw)
-          : String(raw);
-        return { kind: "string", value: value.slice(0, STRING_PREVIEW_BYTES), truncated: value.length > STRING_PREVIEW_BYTES, lengthBytes: length };
+        const length = await number("STRLEN", [key]);
+        if (length !== null && length > STRING_MAX_BYTES) return { kind: "string", value: "", truncated: true, lengthBytes: length };
+        // STRLEN and the value read are separate round trips — a concurrent
+        // SET could grow the value between them — so always bound the read;
+        // a plain GET could pull a value up to the 512MB Redis max.
+        const raw = await send("GETRANGE", [key, "0", String(STRING_MAX_BYTES - 1)]);
+        const value = raw === null || raw === undefined ? "" : text(raw);
+        // GETRANGE caps bytes, not decoded chars — multibyte values need the
+        // encoded length for both the truncation signal and the byte count.
+        const valueBytes = new TextEncoder().encode(value).length;
+        return {
+          kind: "string",
+          value: value.slice(0, STRING_PREVIEW_BYTES),
+          truncated: value.length > STRING_PREVIEW_BYTES || valueBytes >= STRING_MAX_BYTES,
+          lengthBytes: length ?? valueBytes,
+        };
       }
       case "hash": {
         const [next, flat] = await scanPairs("HSCAN", key, cursor);
@@ -311,21 +377,33 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
       }
       case "set": {
         const [next, flat] = await scanPairs("SSCAN", key, cursor);
-        return { kind: "set", members: flat.map(String), cursor: next, truncated: next !== "0" };
+        return { kind: "set", members: flat.map(text), cursor: next, truncated: next !== "0" };
       }
       case "zset": {
         const [next, flat] = await scanPairs("ZSCAN", key, cursor);
-        const entries: { member: string; score: number }[] = [];
-        for (let i = 0; i + 1 < flat.length; i += 2) entries.push({ member: String(flat[i]), score: Number(flat[i + 1]) });
+        const entries: { member: string; score: number | string }[] = [];
+        for (let i = 0; i + 1 < flat.length; i += 2) {
+          const score = Number(flat[i + 1]);
+          // ±inf scores are legal; JSON cannot carry them, so send text.
+          entries.push({ member: text(flat[i]), score: Number.isFinite(score) ? score : text(flat[i + 1]) });
+        }
         return { kind: "zset", entries, cursor: next, truncated: next !== "0" };
       }
       case "list": {
-        const start = cursor !== undefined && /^\d+$/.test(cursor) ? Number(cursor) : 0;
+        if (cursor !== undefined && !/^\d+$/.test(cursor)) throw new DbError("invalid_change", "Invalid list cursor");
+        const start = cursor !== undefined ? Number(cursor) : 0;
+        // A cursor past MAX_SAFE_INTEGER serializes as "1e+21" — refuse it
+        // here rather than letting the server answer ERR not-an-integer.
+        if (!Number.isSafeInteger(start)) throw new DbError("invalid_change", "Invalid list cursor");
         const rawItems = await send("LRANGE", [key, String(start), String(start + PAGE_SIZE - 1)]);
-        const items = (Array.isArray(rawItems) ? rawItems : []).map(String);
-        return { kind: "list", items, start, truncated: start + items.length < (await number("LLEN", [key]) ?? start + items.length) };
+        const items = (Array.isArray(rawItems) ? rawItems : []).map(text);
+        // A denied LLEN must not hide "Load more" — a full page may have
+        // more behind it even when the total can't be read.
+        const total = await number("LLEN", [key]);
+        return { kind: "list", items, start, truncated: total == null ? items.length === PAGE_SIZE : start + items.length < total };
       }
       case "stream": {
+        if (cursor !== undefined && !/^\d+-\d+$/.test(cursor)) throw new DbError("invalid_change", "Invalid stream cursor");
         // Pre-6.2 ranges include the cursor entry itself (dropped below), so
         // paging there fetches one extra; +1 always probes for a further page.
         const count = PAGE_SIZE + 1 + (cursor !== undefined && !versionAtLeast(version, 6, 2) ? 1 : 0);
@@ -346,24 +424,25 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
   }
 
   async function scanPairs(command: "HSCAN" | "SSCAN" | "ZSCAN", key: string, cursor?: string): Promise<[string, unknown[]]> {
-    const raw = await send(command, [key, /^\d+$/.test(cursor ?? "") ? cursor! : "0", "COUNT", String(PAGE_SIZE)]);
+    if (cursor !== undefined && !/^\d+$/.test(cursor)) throw new DbError("invalid_change", `Invalid ${command} cursor`);
+    const raw = await send(command, [key, cursor ?? "0", "COUNT", String(PAGE_SIZE)]);
     if (!Array.isArray(raw) || raw.length < 2 || !Array.isArray(raw[1])) throw new DbError("sql", `Unexpected ${command} reply`);
-    return [String(raw[0]), raw[1] as unknown[]];
+    return [text(raw[0]), raw[1] as unknown[]];
   }
 }
 
 function pairEntries(flat: unknown[]): { field: string; value: string }[] {
   const entries: { field: string; value: string }[] = [];
-  for (let i = 0; i + 1 < flat.length; i += 2) entries.push({ field: String(flat[i]), value: String(flat[i + 1]) });
+  for (let i = 0; i + 1 < flat.length; i += 2) entries.push({ field: text(flat[i]), value: text(flat[i + 1]) });
   return entries;
 }
 
 function parseStreamEntry(raw: unknown): { id: string; fields: Record<string, string> } {
-  if (!Array.isArray(raw) || raw.length < 2 || !Array.isArray(raw[1])) return { id: String(raw), fields: {} };
-  const fields: Record<string, string> = {};
+  if (!Array.isArray(raw) || raw.length < 2 || !Array.isArray(raw[1])) return { id: text(raw), fields: {} };
+  const fields: Record<string, string> = Object.create(null);
   const flat = raw[1] as unknown[];
-  for (let i = 0; i + 1 < flat.length; i += 2) fields[String(flat[i])] = String(flat[i + 1]);
-  return { id: String(raw[0]), fields };
+  for (let i = 0; i + 1 < flat.length; i += 2) fields[text(flat[i])] = text(flat[i + 1]);
+  return { id: text(raw[0]), fields };
 }
 
 // Stream ids compare numerically per segment ("9-1" sorts before "10-1").
@@ -380,9 +459,12 @@ function keyOpCommand(op: KeyOp, version: string): { command: string; args: stri
     case "expire": return { command: "EXPIRE", args: [op.key, String(Math.floor(op.seconds))] };
     case "persist": return { command: "PERSIST", args: [op.key] };
     // Editing preserves the key's TTL where the server supports KEEPTTL.
-    case "setString": return versionAtLeast(version, 6)
-      ? { command: "SET", args: [op.key, op.value, "KEEPTTL"] }
-      : { command: "SET", args: [op.key, op.value] };
+    // An unknown version (proxied INFO) must fail loud — omitting KEEPTTL
+    // on a ≥6 server silently drops the TTL, while sending it to a <6
+    // server only yields a recoverable command_error.
+    case "setString": return /^\d+/.test(version) && !versionAtLeast(version, 6)
+      ? { command: "SET", args: [op.key, op.value] }
+      : { command: "SET", args: [op.key, op.value, "KEEPTTL"] };
     case "hashSet": return { command: "HSET", args: [op.key, op.field, op.value] };
     case "hashDelete": return { command: "HDEL", args: [op.key, ...op.fields] };
     case "setAdd": return { command: "SADD", args: [op.key, ...op.members] };
@@ -390,5 +472,6 @@ function keyOpCommand(op: KeyOp, version: string): { command: string; args: stri
     case "zsetAdd": return { command: "ZADD", args: [op.key, String(op.score), op.member] };
     case "zsetRemove": return { command: "ZREM", args: [op.key, ...op.members] };
     case "listSet": return { command: "LSET", args: [op.key, String(op.index), op.value] };
+    default: throw new DbError("invalid_change", "Unknown key operation");
   }
 }

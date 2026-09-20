@@ -163,7 +163,7 @@ export type KeyValueView =
   | { kind: "hash"; entries: { field: string; value: string }[]; cursor: string; truncated: boolean }
   | { kind: "list"; items: string[]; start: number; truncated: boolean }
   | { kind: "set"; members: string[]; cursor: string; truncated: boolean }
-  | { kind: "zset"; entries: { member: string; score: number }[]; cursor: string; truncated: boolean }
+  | { kind: "zset"; entries: { member: string; score: number | string }[]; cursor: string; truncated: boolean }
   | { kind: "stream"; length: number; entries: { id: string; fields: Record<string, string> }[]; lastId: string | null; truncated: boolean }
   | { kind: "none" }
   | { kind: "unknown"; note: string };
@@ -171,7 +171,7 @@ export type KeyValueView =
 export interface KeyInspection {
   key: string;
   type: string;             // string|list|set|zset|hash|stream|none|unknown server type
-  ttlSeconds: number;       // -1 no expiry, -2 missing key
+  ttlSeconds: number | null; // -1 no expiry, -2 missing key, null unreadable
   memoryBytes: number | null;
   size: number | null;      // cardinality / length / strlen
   value: KeyValueView;

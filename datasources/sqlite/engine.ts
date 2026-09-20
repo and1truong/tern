@@ -1,7 +1,7 @@
 import { splitSqlStatements } from "../../shared/sqlConsole.ts";
 import { validateMigrationSql } from "../../shared/migrationSafety.ts";
 import { Database } from "bun:sqlite";
-import { existsSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, statSync, unlinkSync } from "node:fs";
 import { join, isAbsolute, normalize } from "node:path";
 import { homedir } from "node:os";
 import type { DbSchema, DbTable, DbColumn, QueryResult, ExecResult, RowChange, RowMutationResult, DatabaseInsights, MigrationResult } from "../../shared/types.ts";
@@ -37,22 +37,79 @@ function openWrite(path: string, safeIntegers = false): Database {
   let st;
   try { st = statSync(path); } catch { throw new DbError("not_found", "database file not found"); }
   if (!st.isFile()) throw new DbError("not_found", "not a file");
+  let db: Database;
+  try { db = new Database(path, { safeIntegers }); }
+  catch { throw new DbError("not_a_database", "could not open as sqlite (read/write)"); }
   try {
-    const db = new Database(path, { safeIntegers });
+    // The stat above is check-then-open — a file deleted in the gap would
+    // have been recreated empty at a different inode than the one gated.
+    const now = statSync(path);
+    if (now.dev !== st.dev || now.ino !== st.ino) {
+      throw new DbError("conflict", "the file at this path changed while the database was being opened");
+    }
     db.exec("PRAGMA foreign_keys = ON");
     return db;
   }
-  catch { throw new DbError("not_a_database", "could not open as sqlite (read/write)"); }
+  catch (error) {
+    db.close();
+    if (error instanceof DbError) throw error;
+    // A file deleted between open and re-stat reports ENOENT — the same
+    // swap conflict, not a malformed database.
+    const enoent = (error as NodeJS.ErrnoException).code === "ENOENT";
+    throw new DbError(enoent ? "conflict" : "not_a_database",
+      enoent ? "the file at this path changed while the database was being opened" : "could not open as sqlite (read/write)");
+  }
 }
 
 export function createDatabase(pathRaw: string): { path: string; created: true } {
   const path = resolvePath(pathRaw);
-  if (existsSync(path)) throw new DbError("conflict", "a file already exists at this path");
+  // Reserve the path exclusively — an existsSync check followed by a normal
+  // create would silently open (and report "created" for) a file that
+  // materialized in between.
+  let reserved: { dev: number; ino: number };
+  try {
+    const fd = openSync(path, "wx", 0o600);
+    try { const st = fstatSync(fd); reserved = { dev: st.dev, ino: st.ino }; }
+    finally { closeSync(fd); }
+  }
+  catch (error) {
+    throw (error as NodeJS.ErrnoException).code === "EEXIST"
+      ? new DbError("conflict", "a file already exists at this path")
+      : new DbError("not_found", error instanceof Error ? error.message : "could not create database");
+  }
+  // Only our own reservation may be unlinked — a foreign file swapped into
+  // the gap must be re-verified before removal (or left alone).
+  const cleanupReservation = () => {
+    try { const st = statSync(path); if (st.dev === reserved.dev && st.ino === reserved.ino) unlinkSync(path); }
+    catch { /* best-effort cleanup */ }
+  };
   let db: Database;
-  try { db = new Database(path, { create: true }); }
-  catch (error) { throw new DbError("not_found", error instanceof Error ? error.message : "could not create database"); }
+  try { db = new Database(path); }
+  catch (error) {
+    // Don't leave the 0-byte reservation behind — it would report "conflict"
+    // on retry although no valid database exists.
+    cleanupReservation();
+    throw new DbError("not_found", error instanceof Error ? error.message : "could not create database");
+  }
+  // The exclusivity ended at closeSync — if a different file was swapped into
+  // the gap, refuse to adopt it (and never unlink someone else's file).
+  let now;
+  try { now = statSync(path); }
+  catch {
+    db.close();
+    throw new DbError("conflict", "the file at this path changed while the database was being created");
+  }
+  if (now.dev !== reserved.dev || now.ino !== reserved.ino) {
+    db.close();
+    throw new DbError("conflict", "the file at this path changed while the database was being created");
+  }
   try { db.exec("PRAGMA foreign_keys = ON"); }
-  finally { db.close(); }
+  catch (error) {
+    db.close();
+    cleanupReservation();
+    throw error;
+  }
+  db.close();
   return { path, created: true };
 }
 
@@ -246,7 +303,7 @@ export function runExec(pathRaw: string, sql: string, readOnly = false): ExecRes
       } else db.exec(sql);
       rowsAffected = multiple ? null : Number(db.query<{ c: bigint }, []>("SELECT changes() AS c").get()?.c ?? 0);
     }
-    catch (e) { throw new DbError("sql", e instanceof Error ? e.message : String(e)); }
+    catch (e) { if (e instanceof DbError) throw e; throw new DbError("sql", e instanceof Error ? e.message : String(e)); }
     const ms = Math.round((performance.now() - t0) * 10) / 10;
     if (result) result.ms = ms;
     return { rowsAffected, ms, ...(result ? { result } : {}) };
