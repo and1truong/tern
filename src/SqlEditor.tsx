@@ -20,14 +20,15 @@ function freshConsole(): SavedConsole {
   return { tabs: [{ id, name: "Console 1", sql: "" }], activeId: id, history: [] };
 }
 
-function isSavedConsole(value: unknown): value is SavedConsole {
+export function isSavedConsole(value: unknown): value is SavedConsole {
   if (!value || typeof value !== "object") return false;
   const saved = value as Partial<SavedConsole>;
   return Array.isArray(saved.tabs) && saved.tabs.length > 0 && typeof saved.activeId === "string" && Array.isArray(saved.history)
     // A corrupt tab or history entry must not reach render — `active.sql`
     // would be undefined and crash `active.sql.trim()` with no boundary.
     && saved.tabs.every(t => t && typeof t.id === "string" && typeof t.name === "string" && typeof t.sql === "string")
-    && saved.history.every(h => h && typeof h.sql === "string");
+    && saved.history.every(h => h && typeof h.id === "string" && typeof h.sql === "string"
+      && typeof h.ranAt === "number" && typeof h.ms === "number" && typeof h.ok === "boolean");
 }
 
 // Persisted copies scrub credential literals — the in-memory buffer keeps the

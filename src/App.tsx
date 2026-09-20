@@ -106,7 +106,7 @@ export function App() {
         await dbApi.open(source.path);
         // A forget() issued while this connect was in flight must stick —
         // /open re-inserts into recent_files, so drop it again.
-        if (forgotten.current.has(source.path)) { void dbApi.forget(source.path); setStates(s => ({ ...s, [key]: 'Disconnected' })); return null; }
+        if (forgotten.current.has(source.path)) { void dbApi.forget(source.path).catch(() => {}); setStates(s => ({ ...s, [key]: 'Disconnected' })); return null; }
       }
       const schema = await dbApi.schema(source);
       if (source.kind === "postgres") {
@@ -114,9 +114,12 @@ export function App() {
         setDatabases(s => ({ ...s, [source.connId]: result.databases }));
       }
       // Re-assert the user's flag for sqlite too — the server-side session
-      // flag drops on reconnect while the UI still shows Writable.
+      // flag drops on reconnect while the UI still shows Writable. The
+      // thunk re-reads intent at dispatch: if this request sat queued behind
+      // an explicit toggle that then failed and rolled back, sending the
+      // stale flag would leave the server writable under a read-only UI.
       const desired = writableRef.current[key] ?? profileWritable;
-      await dbApi.access(source, desired);
+      await dbApi.access(source, () => writableRef.current[key] ?? profileWritable);
       setWritable(s => ({ ...s, [key]: s[key] ?? desired }));
       setSchemas(s => ({ ...s, [key]: schema }));
       setStates(s => ({ ...s, [key]: 'Connected' }));
@@ -308,7 +311,7 @@ export function App() {
             : <ObjectTree schema={schemas[id] ?? null} activeTable={current?.table ?? null} onSelect={table => open('table', table)} locked={false}/>}</>}
         {!connections.length && <p className="p-3 text-[var(--text-muted)]">Open a SQLite file, add a PostgreSQL connection, or connect to Redis to begin.</p>}
       </aside>
-      <div role="separator" aria-label="Resize explorer" aria-orientation="vertical" tabIndex={0} className="resize-handle" onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const width = Math.max(180, Math.min(440, sidebar + (e.key === 'ArrowLeft' ? -10 : 10))); setSidebar(width); void dbApi.state.set('layout', { sidebar: width }); } }} onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) setSidebar(Math.max(180, Math.min(440, e.clientX))); }} onPointerUp={e => { e.currentTarget.releasePointerCapture(e.pointerId); void dbApi.state.set('layout', { sidebar }); }}/>
+      <div role="separator" aria-label="Resize explorer" aria-orientation="vertical" tabIndex={0} className="resize-handle" onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const width = Math.max(180, Math.min(440, sidebar + (e.key === 'ArrowLeft' ? -10 : 10))); setSidebar(width); void dbApi.state.set('layout', { sidebar: width }).catch(() => {}); } }} onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) setSidebar(Math.max(180, Math.min(440, e.clientX))); }} onPointerUp={e => { e.currentTarget.releasePointerCapture(e.pointerId); void dbApi.state.set('layout', { sidebar }).catch(() => {}); }}/>
       <section className="document-area">
         <div className="document-tabs" role="tablist">{tabs.map(doc => <div key={doc.id} className={`document-tab ${doc.id === active ? 'selected' : ''}`}><button role="tab" aria-selected={doc.id === active} title={`${doc.title} — ${sourceLabel(doc.source)}`} onClick={() => { setActive(doc.id); setSelected(doc.source); }}>{doc.kind === 'sql' ? <Terminal size={13}/> : doc.kind === 'diagram' ? <Network size={13}/> : doc.kind === 'insights' ? <Activity size={13}/> : <FileCode size={13}/>} {doc.title}{dirty[doc.id] && ' ●'}</button><button aria-label={`Close ${doc.title}`} onClick={() => close(doc)}>×</button></div>)}<button aria-label="New document" disabled={!source} onClick={() => open(source?.kind === 'redis' ? 'console' : 'sql')}>+</button></div>
         {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite · PostgreSQL · Redis / Valkey workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button><button onClick={() => setPicker('redis')}>New Redis connection</button>{source && <><button onClick={() => open(source.kind === 'redis' ? 'console' : 'sql')}>New {source.kind === 'redis' ? 'console' : 'SQL'} document <kbd>⌘N</kbd></button>{source.kind !== 'redis' && <><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}

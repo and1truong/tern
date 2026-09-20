@@ -63,8 +63,9 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
   // them — dropping to read-only clears any pending confirm.
   useEffect(() => { if (!writable) { setRenaming(null); setDeleting(null); setExpiring(null); } }, [writable]);
   // A source switch (another logical DB) can hold keys with identical names;
-  // an armed confirm must not fire against a key from a different database.
-  useEffect(() => { setRenaming(null); setDeleting(null); setExpiring(null); }, [source]);
+  // an armed confirm must not fire against a key from a different database,
+  // and stale rows must not be clickable while the new page loads.
+  useEffect(() => { setRenaming(null); setDeleting(null); setExpiring(null); setPage({ cursor: '0', keys: [] }); }, [source]);
 
   const op = async (body: Parameters<typeof dbApi.datasource.keyOp>[1]) => {
     setBusy(n => n + 1); setError('');

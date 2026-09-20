@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import Notice from "./Notice.tsx";
 import type { DbTable, RowChangeStatement } from "../shared/types.ts";
 import { tableLabel } from "../shared/sqlIdentifiers.ts";
@@ -11,19 +11,40 @@ import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../s
 // shortcuts must not mutate documents behind it.
 let openDialogs = 0;
 export const anyDialogOpen = () => openDialogs > 0;
-function useDialogOpen(): void {
+// The returned ref goes on the dialog box: it takes focus on mount so Tab
+// starts inside, and trapTab keeps it cycling there — otherwise plain Tab
+// order reaches controls behind the fixed shade (e.g. the grid's Revert
+// under RowChangesModal, which would clear the staged set being previewed).
+function useDialogOpen(): RefObject<HTMLDivElement> {
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     openDialogs++;
+    ref.current?.focus();
     return () => { openDialogs--; };
   }, []);
+  return ref;
 }
+const trapTab = (event: KeyboardEvent<HTMLDivElement>) => {
+  if (event.key !== "Tab") return;
+  const root = event.currentTarget;
+  const focusable = [...root.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]")]
+    .filter((el) => !el.hasAttribute("disabled") && el.tabIndex >= 0);
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!first || !last) return;
+  const active = document.activeElement;
+  if (event.shiftKey ? active === first || active === root : active === last || active === root) {
+    (event.shiftKey ? last : first).focus();
+    event.preventDefault();
+  }
+};
 
 export function InsertRowModal({ table, onClose, onAdd }: {
   table: DbTable;
   onClose: () => void;
   onAdd: (values: Record<string, unknown>) => void;
 }) {
-  useDialogOpen();
+  const dialog = useDialogOpen();
   const [values, setValues] = useState<Record<string, string>>({});
   const writableColumns = table.columns.filter((column) => !column.generated && column.identityGeneration !== "ALWAYS");
   const submit = () => {
@@ -36,7 +57,7 @@ export function InsertRowModal({ table, onClose, onAdd }: {
   };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(event) => event.target === event.currentTarget && onClose()}>
-      <div role="dialog" aria-label="Add row" className="w-[560px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">
+      <div role="dialog" aria-label="Add row" ref={dialog} tabIndex={-1} onKeyDown={trapTab} className="w-[560px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl outline-none">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)]">
           <b className="text-sm text-[var(--text)]">Add row to {tableLabel(table)}</b>
           <button aria-label="Close add row" onClick={onClose} className="ml-auto text-[var(--muted)]">×</button>
@@ -75,7 +96,7 @@ export function ImportCsvModal({ table, onClose, onStage }: {
   onClose: () => void;
   onStage: (rows: Record<string, unknown>[]) => void;
 }) {
-  useDialogOpen();
+  const dialog = useDialogOpen();
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   let preview: ReturnType<typeof parseCsv> | null = null;
@@ -99,7 +120,7 @@ export function ImportCsvModal({ table, onClose, onStage }: {
   };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(event) => event.target === event.currentTarget && onClose()}>
-      <div role="dialog" aria-label="Import CSV" className="w-[720px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">
+      <div role="dialog" aria-label="Import CSV" ref={dialog} tabIndex={-1} onKeyDown={trapTab} className="w-[720px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl outline-none">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)]">
           <b className="text-sm text-[var(--text)]">Import CSV into {tableLabel(table)}</b>
           <button aria-label="Close CSV import" onClick={onClose} className="ml-auto text-[var(--muted)]">×</button>
@@ -125,7 +146,7 @@ export function ImportCsvModal({ table, onClose, onStage }: {
 }
 
 export function ValueInspector({ column, value, onClose }: { column: string; value: unknown; onClose: () => void }) {
-  useDialogOpen();
+  const dialog = useDialogOpen();
   const text = isDbBinaryValue(value)
     ? `Binary value (${binaryByteLength(value).toLocaleString()} bytes)\n\nBase64:\n${value.__ternWire.base64}`
     : (() => {
@@ -135,7 +156,7 @@ export function ValueInspector({ column, value, onClose }: { column: string; val
   const [copied, setCopied] = useState<"idle" | "copied" | "error">("idle");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(event) => event.target === event.currentTarget && onClose()}>
-      <div role="dialog" aria-label="Large value inspector" className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">
+      <div role="dialog" aria-label="Large value inspector" ref={dialog} tabIndex={-1} onKeyDown={trapTab} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl outline-none">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)]">
           <b className="text-sm text-[var(--text)]">{column}</b>
           <span className="mono text-[10px] text-[var(--faint)]">{text.length.toLocaleString()} characters</span>
@@ -156,10 +177,10 @@ export function RowChangesModal({ statements, applying, error, onClose, onApply,
   onClose: () => void;
   onApply: () => void;
 }) {
-  useDialogOpen();
+  const dialog = useDialogOpen();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(event) => event.target === event.currentTarget && !applying && onClose()}>
-      <div role="dialog" aria-label="Review row changes" className="w-[680px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">
+      <div role="dialog" aria-label="Review row changes" ref={dialog} tabIndex={-1} onKeyDown={trapTab} className="w-[680px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl outline-none">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)]">
           <b className="text-sm text-[var(--text)]">Review {statements.length} row change{statements.length === 1 ? "" : "s"}</b>
           <button aria-label="Close row changes" disabled={applying} onClick={onClose} className="ml-auto text-[var(--muted)]">×</button>

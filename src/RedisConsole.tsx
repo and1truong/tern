@@ -22,8 +22,11 @@ function isSavedConsole(value: unknown): value is SavedConsole {
   return typeof saved.input === 'string' && Array.isArray(saved.history) && Array.isArray(saved.favorites);
 }
 
-// Redis-cli style rendering of a tagged RESP value.
+// Redis-cli style rendering of a tagged RESP value. The wire shape is only
+// trusted as far as the tag — a malformed node renders as unprintable
+// rather than crashing the app (there is no error boundary above us).
 export function renderRESP(value: RespValue, indent = ""): string[] {
+  if (!value || typeof value !== "object") return [`${indent}(unprintable reply)`];
   switch (value.t) {
     case "nil": return [`${indent}(nil)`];
     case "str": return [`${indent}"${value.s.replace(/\n/g, "\\n")}"`];
@@ -38,17 +41,21 @@ export function renderRESP(value: RespValue, indent = ""): string[] {
       // A pathological or hostile reply could nest deep enough to overflow
       // the stack mid-render — cap the depth instead of crashing the app.
       if (indent.length > 64) return [`${indent}…`];
-      if (!value.items.length) return [`${indent}(empty ${value.t === "set" ? "set" : "array"})`];
-      return value.items.flatMap((item, i) => [
+      const items = Array.isArray(value.items) ? value.items : [];
+      if (!items.length) return [`${indent}(empty ${value.t === "set" ? "set" : "array"})`];
+      return items.flatMap((item, i) => [
         `${indent}${i + 1})`,
         ...renderRESP(item, indent === "" ? "  " : indent + " "),
       ]);
     }
-    case "map":
-      return value.entries.flatMap(([k, v], i) => [
-        `${indent}${i + 1}) ${renderRESP(k, "").join("").trim()}`,
-        ...renderRESP(v, indent + "  "),
+    case "map": {
+      const entries = Array.isArray(value.entries) ? value.entries : [];
+      return entries.flatMap((pair, i) => [
+        `${indent}${i + 1}) ${renderRESP(pair?.[0], "").join("").trim()}`,
+        ...renderRESP(pair?.[1], indent + "  "),
       ]);
+    }
+    default: return [`${indent}(unprintable reply)`];
   }
 }
 
@@ -167,8 +174,10 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
       const entry: OutputEntry = { command, at: Date.now() };
       try {
         const result = await dbApi.datasource.exec(source, command, controller.signal);
-        entry.result = result;
-        onLatency(result.ms);
+        // A malformed result (no reply node) must not wedge `busy` nor
+        // crash renderRESP downstream — treat it like a command error.
+        if (!result?.reply || typeof result.reply !== "object" || typeof result.ms !== "number") entry.error = "Malformed server reply";
+        else { entry.result = result; onLatency(result.ms); }
       } catch (e) { entry.error = controller.signal.aborted ? "Cancelled" : String(e); }
       entries.push(entry);
       setOutputs([...entries]);
