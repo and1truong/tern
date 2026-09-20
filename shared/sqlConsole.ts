@@ -71,8 +71,11 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
   let blockComment = 0;
   let dollarTag: string | null = null;
   let trigger = false;
-  let bodyDepth = 0;
+  // Trigger bodies nest BEGIN…END and CASE…END — a stack of openers tells
+  // the body's closing END apart from `end` used as a plain identifier.
+  const opens: string[] = [];
   let triggerBegins = 0;
+  let prev = "";
   const leadingWords: string[] = [];
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
@@ -118,13 +121,25 @@ export function splitSqlStatements(sql: string, dialect: Dialect = "sqlite"): { 
       leadingWords.push(word);
       if (word === "TRIGGER" && leadingWords.length <= 4 && (/^CREATE (?:(?:TEMP|TEMPORARY) )?TRIGGER$/.test(leadingWords.join(" ")) || (dialect === "postgres" && leadingWords.join(" ") === "CREATE OR REPLACE TRIGGER"))) trigger = true;
       if (trigger && dialect === "sqlite" && word === "BEGIN" && ++triggerBegins > 1) throw new Error("Ambiguous trigger BEGIN: quote identifiers named begin before executing this script");
-      if (trigger && (word === "BEGIN" || word === "CASE")) bodyDepth++;
+      if (trigger && (word === "BEGIN" || word === "CASE")) opens.push(word);
       // `end` is a keyword-fallback identifier in SQLite (a column can be
-      // named end unquoted) — never let it underflow the body depth.
-      if (trigger && word === "END" && bodyDepth > 0) bodyDepth--;
+      // named end unquoted) — never let it decrement the body depth. A '.'
+      // on either side marks a qualified name (old.end, end.foo); otherwise
+      // a CASE's END follows any operand, while the body's closing END
+      // follows ';' (or BEGIN for an empty body).
+      if (trigger && word === "END" && opens.length) {
+        let p = wordStart - 1;
+        while (p >= 0 && /\s/.test(sql[p]!)) p--;
+        let q = i + 1;
+        while (q < sql.length && /\s/.test(sql[q]!)) q++;
+        const qualified = sql[p] === "." || sql[q] === ".";
+        if (!qualified && (opens.at(-1) === "CASE" || prev === ";" || prev === "BEGIN")) opens.pop();
+      }
+      prev = word;
       continue;
     }
-    if (ch === ";" && bodyDepth === 0) {
+    if (!/\s/.test(ch)) prev = ch === ";" ? ";" : "";
+    if (ch === ";" && opens.length === 0) {
       const statement = sql.slice(start, i).trim();
       if (structuralWords(statement, dialect).length) statements.push({ sql: statement, from: start, to: i });
       start = i + 1;

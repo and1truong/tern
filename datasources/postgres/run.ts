@@ -34,7 +34,8 @@ export async function runPgQuery(
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const boundedSql = boundReadSql(sql, limit, offset);
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   let inTransaction = false;
   try {
     await connection.unsafe("BEGIN READ ONLY");
@@ -98,7 +99,8 @@ export async function explainPgQuery(
   const normalized = assertReadOnlySql(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   let inTransaction = false;
   try {
     await connection.unsafe("BEGIN READ ONLY");
@@ -126,7 +128,8 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
   if (readOnly) assertReadOnlyScript(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   try {
     if (readOnly) await connection.unsafe("SET default_transaction_read_only = on");
     // Server-side backstop — a failed cancel-control connection must not
@@ -160,7 +163,8 @@ export async function runPgMigration(url: string, sql: string, apply: boolean, t
   const script = validateMigrationSql(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   const t0 = performance.now();
   let transaction = false;
   try {
@@ -183,7 +187,8 @@ export async function runPgMigration(url: string, sql: string, apply: boolean, t
 
 export async function testPgConnection(url: string, signal?: AbortSignal): Promise<ConnectionTestResult> {
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   const t0 = performance.now();
   try {
     const rows = await controlledPg(url, connection, () => connection.unsafe(
@@ -215,7 +220,8 @@ export async function runPgRowChanges(
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const statements = compileRowChanges(changes);
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   const t0 = performance.now();
   let inTransaction = false;
   try {

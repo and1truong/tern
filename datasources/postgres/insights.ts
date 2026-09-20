@@ -11,7 +11,8 @@ const INTROSPECT_TIMEOUT_MS = 60_000;
 
 export async function readPgInsights(url: string, signal?: AbortSignal): Promise<DatabaseInsights> {
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   const query = (sql: string) => awaitControlled(connection.unsafe(sql) as CancellableQuery<Record<string, unknown>[]>, signal, INTROSPECT_TIMEOUT_MS);
   try {
     await query(`SET statement_timeout = ${INTROSPECT_TIMEOUT_MS}`);

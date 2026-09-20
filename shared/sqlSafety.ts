@@ -23,28 +23,69 @@ const WRITE_TOKENS = new Set([
 
 // Tokenize only the SQL structure needed for safety checks. Quoted values,
 // identifiers, and comments are deliberately excluded from the token stream.
-interface SqlToken { value: string; start: number; end: number }
+export interface SqlToken { value: string; start: number; end: number }
 
 // Routine bodies still decode server-side: E'…' takes \xHH/\ooo/\uXXXX/
-// \UXXXXXXXX and U&'…' takes \XXXX/\+XXXXXX — a denylisted name must not
-// hide behind an escape. Invalid escapes are server-side errors anyway, so
-// undecodable input is fine left raw.
-function decodeRoutineBody(raw: string, prefix?: string): string {
+// \UXXXXXXXX, U&'…' takes <esc>XXXX/<esc>+XXXXXX (UESCAPE may redefine the
+// escape char), and under standard_conforming_strings=off even plain '…'
+// literals take escapes — a denylisted name must not hide behind any of
+// them. Invalid escapes are server-side errors anyway, so undecodable
+// input is fine left raw.
+function decodeRoutineBody(raw: string, prefix?: string, uescape = "\\"): string {
   const body = raw.replace(/''/g, "'");
   try {
-    if (prefix === "E") {
-      return body.replace(/\\x[0-9a-fA-F]{1,2}|\\[0-7]{1,3}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}/g,
-        m => String.fromCodePoint(m[1] === "x" || m[1] === "u" || m[1] === "U" ? parseInt(m.slice(2), 16) : parseInt(m.slice(1), 8)));
-    }
     if (prefix === "U") {
-      return body.replace(/\\\+[0-9a-fA-F]{6}|\\[0-9a-fA-F]{4}/g,
-        m => String.fromCodePoint(parseInt(m.slice(m[1] === "+" ? 2 : 1), 16)));
+      // U&'…' decodes <esc>XXXX / <esc>+XXXXXX — UESCAPE may redefine the
+      // escape char; multi-char escapes are server-side errors anyway.
+      if (uescape.length !== 1) return body;
+      const esc = uescape.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return body.replace(new RegExp(`${esc}\\+[0-9a-fA-F]{6}|${esc}[0-9a-fA-F]{4}`, "g"),
+        m => String.fromCodePoint(parseInt(m.slice(1), 16)));
     }
+    // E'…' — and under standard_conforming_strings=off every other plain
+    // literal — honors backslash escapes. Over-decoding is the safe
+    // direction: a body that only differs under the wrong setting errors
+    // server-side anyway.
+    return body.replace(/\\x[0-9a-fA-F]{1,2}|\\[0-7]{1,3}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}/g,
+      m => String.fromCodePoint(m[1] === "x" || m[1] === "u" || m[1] === "U" ? parseInt(m.slice(2), 16) : parseInt(m.slice(1), 8)));
   } catch { /* out-of-range code points are server-side errors anyway */ }
   return body;
 }
 
-function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres", bodies?: string[]): SqlToken[] {
+// An optional `UESCAPE <sconst>` clause after a U& literal redefines its
+// escape character. Returns the decoded char and the clause end, or null.
+function uescapeClause(sql: string, pos: number): { esc: string; end: number } | null {
+  let j = pos;
+  const skipSpace = () => {
+    for (;;) {
+      while (j < sql.length && /\s/.test(sql[j]!)) j++;
+      if (sql[j] === "-" && sql[j + 1] === "-") { while (j < sql.length && sql[j] !== "\n") j++; continue; }
+      if (sql[j] === "/" && sql[j + 1] === "*") {
+        let depth = 1; j += 2;
+        while (j < sql.length && depth) {
+          if (sql[j] === "/" && sql[j + 1] === "*") { depth++; j += 2; }
+          else if (sql[j] === "*" && sql[j + 1] === "/") { depth--; j += 2; }
+          else j++;
+        }
+        continue;
+      }
+      break;
+    }
+  };
+  skipSpace();
+  const kw = /^UESCAPE\b/i.exec(sql.slice(j));
+  if (!kw) return null;
+  j += kw[0].length;
+  skipSpace();
+  // The clause accepts any SCONST — 'c', E'c', N'c', or $$c$$/$tag$c$tag$.
+  const dollar = /^\$([A-Za-z_0-9]*)\$[\s\S]*?\$\1\$/.exec(sql.slice(j));
+  const quoted = dollar ? null : /^[eEnN]?'(?:[^'\\]|\\.|'')*'/.exec(sql.slice(j));
+  if (dollar) return { esc: dollar[0].slice(2 + dollar[1].length, dollar[0].length - 2 - dollar[1].length), end: j + dollar[0].length };
+  if (quoted) return { esc: quoted[0].replace(/^[eEnN]?'/, "").slice(0, -1).replace(/''/g, "'").replace(/\\(.)/g, "$1"), end: j + quoted[0].length };
+  return null;
+}
+
+export function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres", bodies?: string[]): SqlToken[] {
   const tokens: SqlToken[] = [];
   let i = 0;
   while (i < sql.length) {
@@ -85,11 +126,18 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres",
         // Gating on the preceding token keeps 'pg_sleep' data literals from
         // false-positiving (AS 'label' aliases are the contrived residue).
         // E/N/U& are legal SCONST prefixes — DO U&'…' lexes U as a word.
+        // bodySlot(k): the k-th-from-last word precedes the literal —
+        // DO code | DO LANGUAGE lang code | DO LANGUAGE 'lang' code | AS.
+        const bodySlot = (k: number) => {
+          const t1 = tokens.at(-k)?.value, t2 = tokens.at(-k - 1)?.value, t3 = tokens.at(-k - 2)?.value;
+          return t1 === "DO" || t1 === "AS" || (t1 === "LANGUAGE" && t2 === "DO") || (t2 === "LANGUAGE" && t3 === "DO");
+        };
         const last = tokens.at(-1)?.value;
-        const prev = tokens.at(-2)?.value;
-        const prefix = (last === "E" || last === "N" || last === "U") && (prev === "DO" || prev === "AS") ? last : undefined;
-        if (last === "DO" || last === "AS" || prefix) {
-          bodies.push(decodeRoutineBody(sql.slice(contentStart, contentEnd), prefix));
+        const isPrefix = last === "E" || last === "N" || last === "U";
+        if (bodySlot(isPrefix ? 2 : 1)) {
+          // A U& body may carry its own UESCAPE clause after the literal.
+          const esc = last === "U" ? uescapeClause(sql, i)?.esc : undefined;
+          bodies.push(decodeRoutineBody(sql.slice(contentStart, contentEnd), isPrefix ? last : undefined, esc ?? "\\"));
         }
       }
       // "name"( — a double-quoted identifier immediately calling — is a real
@@ -123,24 +171,8 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres",
         // one identifier).
         let uescape = "\\";
         if (isUIdent) {
-          const kw = sql.slice(j).match(/^UESCAPE\b/i);
-          if (kw) {
-            j += kw[0].length;
-            skipSpace();
-            // The clause accepts any SCONST — 'c', E'c', N'c', or
-            // $$c$$/$tag$c$tag$ (base_yylex checks the token kind, not the
-            // quoting form). A clause that can't be consumed errors
-            // server-side, so leaving j there is still safe.
-            const dollar = sql.slice(j).match(/^\$([A-Za-z_0-9]*)\$[\s\S]*?\$\1\$/);
-            const quoted = dollar ? null : sql.slice(j).match(/^[eEnN]?'(?:[^'\\]|\\.|'')*'/);
-            if (dollar) {
-              uescape = dollar[0].slice(2 + dollar[1].length, dollar[0].length - 2 - dollar[1].length);
-              j += dollar[0].length; skipSpace();
-            } else if (quoted) {
-              uescape = quoted[0].replace(/^[eEnN]?'/, "").slice(0, -1).replace(/''/g, "'").replace(/\\(.)/g, "$1");
-              j += quoted[0].length; skipSpace();
-            }
-          }
+          const clause = uescapeClause(sql, j);
+          if (clause) { uescape = clause.esc; j = clause.end; skipSpace(); }
         }
         if (sql[j] === "(") {
           let name = sql.slice(contentStart, contentEnd);
@@ -172,9 +204,13 @@ function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "postgres",
         const end = sql.indexOf(tag, i + tag.length);
         // Same DO/AS gate as the '…' path — a dollar-quoted data literal
         // (INSERT ... VALUES ($$called pg_sleep at 3am$$)) is not a routine
-        // body and must not trip the migration function scan.
-        if (bodies && end !== -1 && ["DO", "AS"].includes(tokens.at(-1)?.value ?? "")) {
-          bodies.push(sql.slice(i + tag.length, end));
+        // body and must not trip the migration function scan. LANGUAGE
+        // <word|'name'> may sit between DO and the code literal.
+        if (bodies && end !== -1) {
+          const t1 = tokens.at(-1)?.value, t2 = tokens.at(-2)?.value, t3 = tokens.at(-3)?.value;
+          if (t1 === "DO" || t1 === "AS" || (t1 === "LANGUAGE" && t2 === "DO") || (t2 === "LANGUAGE" && t3 === "DO")) {
+            bodies.push(sql.slice(i + tag.length, end));
+          }
         }
         i = end === -1 ? sql.length : end + tag.length;
         continue;
@@ -309,6 +345,14 @@ export const PG_SIDE_EFFECT_FUNCTIONS = new Set([
   // above are its siblings.
   "DBLINK", "DBLINK_CONNECT", "DBLINK_CONNECT_U", "DBLINK_EXEC", "DBLINK_SEND_QUERY",
   "PG_NOTIFY", "PG_LOGICAL_SLOT_GET_CHANGES", "PG_LOGICAL_SLOT_GET_BINARY_CHANGES",
+  // Peek exposes the same decoded WAL as the get_* variants — the data just
+  // isn't consumed.
+  "PG_LOGICAL_SLOT_PEEK_CHANGES", "PG_LOGICAL_SLOT_PEEK_BINARY_CHANGES",
+  // Credential-bearing catalogs — a bare SELECT reaches them where the file
+  // readers above were denied for the same exfiltration class. Token-level
+  // matching means an identifier named pg_shadow false-positives; that
+  // over-deny is the safe direction.
+  "PG_AUTHID", "PG_SHADOW", "PG_SUBSCRIPTION",
 ]);
 
 const TRANSACTION_VERBS = new Set(["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE", "ABORT"]);

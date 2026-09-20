@@ -56,7 +56,10 @@ export function withLegacyCredentials(current: SecretStore, legacy: SecretStore)
   const enqueue = <T>(name: string, op: () => Promise<T>): Promise<T> => {
     const run = (pending.get(name) ?? Promise.resolve()).catch(() => {}).then(op);
     pending.set(name, run);
-    void run.finally(() => { if (pending.get(name) === run) pending.delete(name); });
+    // finally() would forward run's rejection on a discarded promise —
+    // then(settle, settle) cleans up without an unhandled rejection.
+    const settle = () => { if (pending.get(name) === run) pending.delete(name); };
+    void run.then(settle, settle);
     return run;
   };
   return {

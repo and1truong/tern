@@ -176,6 +176,12 @@ test('ambiguous BEGIN identifiers in trigger headers cannot swallow following st
     expect(() => splitSqlStatements(`${header} BEGIN SELECT 1; END; COMMIT;`, 'sqlite')).toThrow('Ambiguous trigger BEGIN');
   }
   expect(splitSqlStatements('CREATE TRIGGER "begin" AFTER INSERT ON "begin" BEGIN SELECT CASE WHEN 1 THEN 1 END; END; SELECT 1;', 'sqlite')).toHaveLength(2);
+  // `end` used as a qualified (old.end) or bare column name inside the body
+  // is an identifier, not the closing END — the trigger must not mis-split.
+  expect(splitSqlStatements(
+    'CREATE TRIGGER tr AFTER UPDATE ON e2 BEGIN SELECT old.end; UPDATE e2 SET end = new.end; END; SELECT 1;',
+    'sqlite',
+  )).toHaveLength(2);
 });
 
 test("PostgreSQL TABLE shorthand is read-only unless it locks rows", () => {

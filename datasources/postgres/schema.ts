@@ -37,7 +37,8 @@ export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
 
 export async function readPgSchema(url: string, signal?: AbortSignal): Promise<DbSchema> {
   const db = await open(url);
-  const connection = await db.reserve();
+  // A failed reservation must not leak the freshly opened client.
+  const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   const query = (sql: string) => awaitControlled(connection.unsafe(sql) as CancellableQuery<Record<string, unknown>[]>, signal, INTROSPECT_TIMEOUT_MS);
   try {
     await query(`SET statement_timeout = ${INTROSPECT_TIMEOUT_MS}`);

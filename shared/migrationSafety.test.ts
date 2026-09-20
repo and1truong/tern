@@ -16,6 +16,12 @@ test('migration validation rejects commit aliases and external SQLite files but 
     'CREATE TABLE e2(end INT); CREATE TRIGGER tr AFTER UPDATE ON e2 WHEN old.end <> new.end BEGIN SELECT 1; END;',
     'sqlite',
   )).toContain('TRIGGER');
+  // Inside the body too: `old.end`/`new.end` qualified names are
+  // identifiers, not the closing END — they must not mis-split the trigger.
+  expect(validateMigrationSql(
+    "CREATE TABLE e2(end INT); CREATE TRIGGER tr AFTER UPDATE ON e2 BEGIN SELECT old.end; UPDATE e2 SET end = new.end; END;",
+    'sqlite',
+  )).toContain('TRIGGER');
 });
 
 test('migration scripts cannot override runner-managed settings', () => {
@@ -79,6 +85,19 @@ test('migration preview denies functions whose effects outlive the transaction',
     "DO E'PERFORM p\\x67_sleep(1)';",
     "DO E'PERFORM pg\\137sleep(1)';",
     "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS U&'SELECT pg_read_file($$pg_hba.conf$$)';",
+    // LANGUAGE <word|Sconst> may sit between DO and the code literal.
+    "DO LANGUAGE plpgsql 'BEGIN PERFORM pg_terminate_backend(pid) FROM pg_stat_activity; END';",
+    "DO LANGUAGE plpgsql $$BEGIN PERFORM pg_file_write('/tmp/x','y',false); END$$;",
+    "DO LANGUAGE 'plpgsql' 'BEGIN PERFORM pg_advisory_lock(1); END';",
+    // A U& body honors its own trailing UESCAPE clause — !005f decodes to _.
+    "DO U&'PERFORM pg!005fsleep(1)' UESCAPE '!';",
+    // Under standard_conforming_strings=off a plain literal's escapes decode
+    // too — scanning it as if they do is the safe direction.
+    "DO 'PERFORM pg\\x5fsleep(1)';",
+    // Peek reads the same decoded WAL the denied get_* variants consume.
+    "SELECT pg_logical_slot_peek_changes('s', NULL, NULL);",
+    // Credential-bearing catalogs — same exfiltration class as the file readers.
+    "SELECT * FROM pg_authid;",
   ]) {
     expect(() => validateMigrationSql(sql, 'postgres'), sql).toThrow();
   }

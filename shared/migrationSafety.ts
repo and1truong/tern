@@ -1,5 +1,5 @@
 import { DbError } from "./types.ts";
-import { sqlTokens, PG_SIDE_EFFECT_FUNCTIONS } from "./sqlSafety.ts";
+import { scanSqlTokens, sqlTokens, PG_SIDE_EFFECT_FUNCTIONS } from "./sqlSafety.ts";
 
 // Transaction-scoped advisory locks release at the runner's ROLLBACK and
 // are a legitimate migration idiom — the rest of the denylist carries
@@ -14,7 +14,10 @@ export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres"
   const script = sql.trim();
   if (!script || script.length > 1_000_000) throw new DbError('sql', 'Migration must contain SQL and fit within 1 MB');
   const bodies: string[] = [];
-  const tokens = sqlTokens(script, dialect, bodies);
+  // Positions are kept so a `…​.end` qualified identifier can be told apart
+  // from a trigger body's closing END (the token stream alone can't).
+  const spans = scanSqlTokens(script, dialect, bodies).filter(t => !["(", ")", ","].includes(t.value));
+  const tokens = spans.map(t => t.value);
   if (dialect === 'postgres') {
     const deny = (list: string[]) => list.find(token => PG_SIDE_EFFECT_FUNCTIONS.has(token) && !XACT_LOCKS.has(token));
     // A DO / CREATE FUNCTION body is a dollar-quoted literal the top-level
@@ -26,14 +29,16 @@ export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres"
   }
   let first = true;
   let trigger = false;
-  let depth = 0;
+  // Trigger bodies nest BEGIN…END and CASE…END — a stack of openers tells
+  // the body's closing END apart from `end` used as a plain identifier.
+  const opens: string[] = [];
   let triggerBegins = 0;
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     // Transaction commands are invalid inside SQLite triggers too; do not let body depth hide them.
-    // depth === 0 keeps the trigger body's own closing END (which follows an
-    // inner ';') from tripping the check.
-    if (dialect === 'sqlite' && depth === 0 && tokens[i - 1] === ';' && ['BEGIN', 'COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'].includes(token)) {
+    // opens.length === 0 keeps the trigger body's own closing END (which
+    // follows an inner ';') from tripping the check.
+    if (dialect === 'sqlite' && opens.length === 0 && tokens[i - 1] === ';' && ['BEGIN', 'COMMIT', 'END', 'ABORT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'].includes(token)) {
       throw new DbError('sql', `Transaction control (${token}) is managed by the migration runner`);
     }
     if (first && token !== ';') {
@@ -53,12 +58,23 @@ export function validateMigrationSql(sql: string, dialect: "sqlite" | "postgres"
       first = false;
     }
     if (trigger && dialect === 'sqlite' && token === 'BEGIN' && ++triggerBegins > 1) throw new DbError('sql', 'Ambiguous trigger BEGIN: quote identifiers named begin before executing this script');
-    if (trigger && (token === 'BEGIN' || token === 'CASE')) depth++;
+    if (trigger && (token === 'BEGIN' || token === 'CASE')) opens.push(token);
     // `end` is a keyword-fallback identifier in SQLite — an unquoted column
-    // named end (e.g. WHEN old.end <> new.end) must not underflow the body
-    // depth, or no ';' ever ends the trigger and first-token checks stop.
-    if (trigger && token === 'END' && depth > 0) depth--;
-    if (token === ';' && depth === 0) { first = true; trigger = false; }
+    // named end must not decrement the body depth, or no ';' ever ends the
+    // trigger and first-token checks stop. A '.' on either side marks a
+    // qualified name (old.end, end.foo); otherwise a CASE's END follows any
+    // operand, while the body's closing END follows ';' (or BEGIN for an
+    // empty body).
+    if (trigger && token === 'END' && opens.length) {
+      const span = spans[i]!;
+      let p = span.start - 1;
+      while (p >= 0 && /\s/.test(script[p]!)) p--;
+      let q = span.end;
+      while (q < script.length && /\s/.test(script[q]!)) q++;
+      const qualified = script[p] === '.' || script[q] === '.';
+      if (!qualified && (opens.at(-1) === 'CASE' || tokens[i - 1] === ';' || tokens[i - 1] === 'BEGIN')) opens.pop();
+    }
+    if (token === ';' && opens.length === 0) { first = true; trigger = false; }
   }
   return script;
 }
