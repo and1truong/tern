@@ -51,10 +51,32 @@ export function redactSqlSecrets(sql: string): string {
   // comment between keyword and value still bridges. A pasted DSN keeps its
   // password too — like the redis console, any scheme:// URI's userinfo is
   // stripped rather than enumerating schemes.
-  return sql
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)\S*@/gi, "$1(redacted)@")
-    .replace(
-    /\b(password|identified\s+by(?:\s+values)?)\b(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*(?:=(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*((?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*'|"[^"]*"|\$([^\s$]*)\$[\s\S]*?\$\3\$|(?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*$|"[^"]*$|\$[^\s$]*\$[\s\S]*$|\([^;]*\)|\w+\s*\([^;]*\)|[^\s;'"()]+)|((?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*'|"[^"]*"|\$([^\s$]*)\$[\s\S]*?\$\5\$|(?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*$|"[^"]*$|\$[^\s$]*\$[\s\S]*$|\([^;]*\)|\w+\s*\([^;]*\)))/gi,
-    "$1 '(redacted)'",
+  const redacted = sql.replace(/([a-z][a-z0-9+.-]*:\/\/)\S*@/gi, "$1(redacted)@");
+  // '…', "…" and `…` regions are data or identifiers — a keyword inside one
+  // (SELECT 'password' FROM t) is not a secret, and the value alternation
+  // would consume the closing quote and mangle the persisted buffer. The
+  // keyword's own literal value is still consumed — only matches that START
+  // inside a quoted region are skipped.
+  const literals: [number, number][] = [];
+  for (let i = 0; i < redacted.length; i++) {
+    const ch = redacted[i];
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const start = i++;
+      while (i < redacted.length) {
+        if (redacted[i] === ch) {
+          if (redacted[i + 1] === ch) { i += 2; continue; }
+          i++; break;
+        }
+        i++;
+      }
+      literals.push([start, i]);
+    }
+  }
+  return redacted.replace(
+    /\b(password|identified\s+(?:with\s+\S+\s+)?by(?:\s+values)?)\b(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*(?:=(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*((?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*'|"[^"]*"|\$([^\s$]*)\$[\s\S]*?\$\3\$|(?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*$|"[^"]*$|\$[^\s$]*\$[\s\S]*$|\([^;]*\)|\w+\s*\([^;]*\)|[^\s;'"()]+)|((?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*'|"[^"]*"|\$([^\s$]*)\$[\s\S]*?\$\5\$|(?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*$|"[^"]*$|\$[^\s$]*\$[\s\S]*$|\([^;]*\)|\w+\s*\([^;]*\)))/gi,
+    (...args) => {
+      const offset = args[args.length - 2] as number;
+      return literals.some(([a, b]) => offset >= a && offset < b) ? args[0] as string : `${args[1]} '(redacted)'`;
+    },
   );
 }

@@ -105,8 +105,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
           // RENAME overwrites an existing destination — confirm first. Busy
           // spans the check so other toolbar ops can't interleave with it.
           setBusy(n => n + 1);
-          const check = to === keyName ? Promise.resolve(true)
-            : dbApi.datasource.inspect(source, to).then(target => target.value.kind === 'none' || window.confirm(`"${to}" already exists — overwrite it?`)).catch(() => true);
+          const check = dbApi.datasource.inspect(source, to).then(target => target.value.kind === 'none' || window.confirm(`"${to}" already exists — overwrite it?`)).catch(() => true);
           void check.then(proceed => {
             if (!proceed) return;
             void mutate({ op: 'rename', from: keyName, to }).then(result => {

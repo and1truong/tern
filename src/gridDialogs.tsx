@@ -132,14 +132,14 @@ export function ValueInspector({ column, value, onClose }: { column: string; val
       const displayValue = unwrapDbValueForDisplay(value);
       return typeof displayValue === "object" ? JSON.stringify(displayValue, null, 2) : String(displayValue);
     })();
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"idle" | "copied" | "error">("idle");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(event) => event.target === event.currentTarget && onClose()}>
       <div role="dialog" aria-label="Large value inspector" className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col rounded-xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)]">
           <b className="text-sm text-[var(--text)]">{column}</b>
           <span className="mono text-[10px] text-[var(--faint)]">{text.length.toLocaleString()} characters</span>
-          <button onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))} className="ml-auto px-2 py-1 text-xs text-[var(--muted)]">{copied ? "Copied" : "Copy"}</button>
+          <button onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied("copied")).catch(() => setCopied("error"))} className="ml-auto px-2 py-1 text-xs text-[var(--muted)]">{copied === "copied" ? "Copied" : copied === "error" ? "Copy failed" : "Copy"}</button>
           <button aria-label="Close large value" onClick={onClose} className="text-[var(--muted)]">×</button>
         </div>
         <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words p-4 mono text-xs text-[var(--text)]">{text}</pre>

@@ -77,4 +77,12 @@ test("redactSqlSecrets catches secrets still being typed", () => {
   expect(redactSqlSecrets("psql postgres://admin:hunter2@db.internal/mydb"))
     .toBe("psql postgres://(redacted)@db.internal/mydb");
   expect(redactSqlSecrets("\\connect postgres://u:p@h/d")).not.toContain("u:p");
+  // The keyword inside a quoted literal or identifier is data — redacting it
+  // would consume the closing quote and mangle the persisted buffer.
+  expect(redactSqlSecrets("SELECT 'password' FROM t")).toBe("SELECT 'password' FROM t");
+  expect(redactSqlSecrets(`SELECT 'password', 'x' FROM t`)).toBe("SELECT 'password', 'x' FROM t");
+  expect(redactSqlSecrets('SELECT "password" FROM t')).toBe('SELECT "password" FROM t');
+  // MySQL-style plugin auth still carries a secret literal.
+  expect(redactSqlSecrets("CREATE USER u IDENTIFIED WITH mysql_native_password BY 's3cret'"))
+    .toBe("CREATE USER u IDENTIFIED WITH mysql_native_password BY '(redacted)'");
 });

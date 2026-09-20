@@ -35,6 +35,9 @@ export function renderRESP(value: RespValue, indent = ""): string[] {
     case "verb": return [`${indent}${value.s}`];
     case "arr":
     case "set": {
+      // A pathological or hostile reply could nest deep enough to overflow
+      // the stack mid-render — cap the depth instead of crashing the app.
+      if (indent.length > 64) return [`${indent}…`];
       if (!value.items.length) return [`${indent}(empty ${value.t === "set" ? "set" : "array"})`];
       return value.items.flatMap((item, i) => [
         `${indent}${i + 1})`,

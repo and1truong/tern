@@ -79,8 +79,8 @@ export const dbApi = {
   // Serialized too: a connect re-assert racing an explicit toggle must hit
   // the server in call order or the flag desyncs from the UI.
   access: (src: DbSource, writable: boolean) => {
-    accessWrite = accessWrite.catch(() => {}).then(() => post(`${API}/access`, { ...selector(src), writable }, AbortSignal.timeout(STATE_TIMEOUT_MS)));
-    return accessWrite;
+    accessWrite = accessWrite.catch(() => {}).then(() => post<{ writable: boolean }>(`${API}/access`, { ...selector(src), writable }, AbortSignal.timeout(STATE_TIMEOUT_MS)));
+    return accessWrite as Promise<{ writable: boolean }>;
   },
   forget: (path: string) => fetch(`${API}/recent?path=${encodeURIComponent(path)}`, { method: "DELETE", signal: AbortSignal.timeout(STATE_TIMEOUT_MS) }).then(asJson),
   recent: () => fetch(`${API}/recent`, { signal: AbortSignal.timeout(STATE_TIMEOUT_MS) }).then(asJson<{ databases: DbFile[] }>),

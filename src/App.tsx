@@ -217,8 +217,11 @@ export function App() {
     const prev = writableRef.current[key];
     writableRef.current = { ...writableRef.current, [key]: enabled };
     try {
-      await dbApi.access(target, enabled);
-      setWritable(s => ({ ...s, [key]: enabled }));
+      // The server's flag is authoritative — a timeout can fire after the
+      // server applied the change, and echoing the request would desync.
+      const { writable: actual } = await dbApi.access(target, enabled);
+      writableRef.current = { ...writableRef.current, [key]: actual };
+      setWritable(s => ({ ...s, [key]: actual }));
       setAccessTarget(null);
     } catch (e) {
       const next = { ...writableRef.current };
