@@ -26,50 +26,56 @@ export interface DatasourceRouter {
 const fail = (error: string, status = 400) => Response.json({ error }, { status });
 
 export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistry): DatasourceRouter {
-  const sessions = new Map<string, DriverSession>();
+  // Sessions are stored as promises so concurrent first-requests share one
+  // in-flight connect instead of racing transports.
+  const sessions = new Map<string, Promise<DriverSession>>();
 
   const connKey = (body: Record<string, unknown>) => {
     const connId = typeof body.connId === "string" ? body.connId : "";
     const database = body.database === undefined ? "" : String(body.database);
+    if (database.length > 64) throw new DbError("invalid_change", "Invalid database");
     return { connId, key: `${connId}/${database}`, database: body.database === undefined ? undefined : String(body.database) };
   };
 
-  const resolveSession = async (connId: string, database?: string): Promise<DriverSession> => {
+  const resolveSession = (connId: string, database?: string): Promise<DriverSession> => {
     const key = `${connId}/${database ?? ""}`;
     const cached = sessions.get(key);
     if (cached) return cached;
-    const profile = await profiles.get(connId);
-    if (!profile) throw new DbError("not_found", "Unknown connection");
-    const driver = registry.get(profile.driver);
-    if (!driver) throw new DbError("not_found", `Unknown driver "${profile.driver}"`);
-    const url = await profiles.resolveUrl(connId);
-    if (!url) throw new DbError("not_found", `No stored url for connection "${profile.id}"`);
-    const config = { url, database };
-    const session = await catchDb(() => driver.connect(config));
-    sessions.set(key, session);
-    return session;
+    const connecting = (async () => {
+      const profile = await profiles.get(connId);
+      if (!profile) throw new DbError("not_found", "Unknown connection");
+      const driver = registry.get(profile.driver);
+      if (!driver) throw new DbError("not_found", `Unknown driver "${profile.driver}"`);
+      const url = await profiles.resolveUrl(connId);
+      if (!url) throw new DbError("not_found", `No stored url for connection "${profile.id}"`);
+      return catchDb(() => driver.connect({ url, database }));
+    })();
+    sessions.set(key, connecting);
+    // A failed connect must not poison the cache for later requests.
+    connecting.catch(() => { if (sessions.get(key) === connecting) sessions.delete(key); });
+    return connecting;
   };
 
   const withSession = async (body: Record<string, unknown>, fn: (session: DriverSession) => Promise<unknown>): Promise<Response> => {
     const { connId, key, database } = connKey(body);
+    const pending = resolveSession(connId, database);
     try {
-      const session = await resolveSession(connId, database);
-      return Response.json(await fn(session));
+      return Response.json(await fn(await pending));
     } catch (error) {
       // Only transport-level failures break the session; logical errors (a
-      // read-only rejection, a refused key op) keep the healthy session.
-      // Evicted sessions are closed, never just dropped.
-      if (error instanceof DbError && (error.code === "sql" || error.code === "timeout")) {
-        const evicted = sessions.get(key);
+      // read-only rejection, a refused key op, a command error) keep the
+      // healthy session. Evicted sessions are closed, never just dropped,
+      // and only when the map still holds this exact session.
+      if (error instanceof DbError && (error.code === "sql" || error.code === "timeout") && sessions.get(key) === pending) {
         sessions.delete(key);
-        await evicted?.close().catch(() => {});
+        void pending.then(session => session.close()).catch(() => {});
       }
       return dbErrorResponse(error);
     }
   };
 
   const str = (value: unknown, what: string, min = 1, max = 512): string => {
-    if (typeof value !== "string" || value.length < min || value.length > max) throw new DbError("not_found", `Invalid ${what}`);
+    if (typeof value !== "string" || value.length < min || value.length > max) throw new DbError("invalid_change", `Invalid ${what}`);
     return value;
   };
 
@@ -106,9 +112,9 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           }
           case "/scan": {
             const cursor = str(body.cursor ?? "0", "cursor", 1, 64);
-            if (!/^\d+$/.test(cursor)) throw new DbError("not_found", "Invalid cursor");
+            if (!/^\d+$/.test(cursor)) throw new DbError("invalid_change", "Invalid cursor");
             const count = body.count === undefined ? undefined : Number(body.count);
-            if (count !== undefined && (!Number.isFinite(count) || count < 1 || count > 1000)) throw new DbError("not_found", "Invalid count");
+            if (count !== undefined && (!Number.isFinite(count) || count < 1 || count > 1000)) throw new DbError("invalid_change", "Invalid count");
             return await withSession(body, async (session) => {
               if (!session.explorer) throw new DbError("not_found", "This source has no key explorer");
               return session.explorer.scan({
@@ -129,13 +135,13 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           }
           case "/key/op": {
             const op = body.op;
-            if (!op || typeof op !== "object") throw new DbError("not_found", "Invalid key operation");
+            if (!op || typeof op !== "object") throw new DbError("invalid_change", "Invalid key operation");
             // EXPIRE with 0 or a negative value deletes the key immediately —
             // keep that behind the explicit delete flow, never the expire one.
             if ((op as { op?: string }).op === "expire") {
               const seconds = (op as { seconds?: unknown }).seconds;
               if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 1) {
-                throw new Error("Expire requires a positive number of seconds");
+                throw new DbError("invalid_change", "Expire requires a positive number of seconds");
               }
             }
             // Every key mutation is a write: require the enabled-write session.
@@ -159,7 +165,7 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
       for (const [key, session] of sessions) {
         if (!key.startsWith(prefix)) continue;
         sessions.delete(key);
-        await session.close().catch(() => {});
+        await session.then(s => s.close()).catch(() => {});
       }
     },
   };

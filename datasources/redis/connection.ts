@@ -28,7 +28,9 @@ export function validateRedisUrl(url: string): void {
 
 // Apply (or replace) the logical db index for a session; keeps credentials.
 export function sessionUrl(url: string, database?: string): string {
+  validateRedisUrl(url);
   const parsed = new URL(url);
+  if (database !== undefined && database !== "" && !/^\d+$/.test(database)) throw new Error("The Redis database must be a numeric db index");
   const dbPath = database !== undefined && database !== "" && database !== "0" ? `/${database}` : "";
   const auth = parsed.username || parsed.password
     ? `${parsed.username}:${parsed.password}@`

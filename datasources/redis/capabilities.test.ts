@@ -68,9 +68,9 @@ describe("detectDataSourceInfo", () => {
   });
   test("cluster + search module flags", () => {
     const info = detectDataSourceInfo(withModules.replace("cluster_enabled:0", "cluster_enabled:1"));
-    expect(info.capabilities.cluster).toBe(true);
-    expect(info.capabilities.search).toBe(true);
-    expect(info.capabilities.modules).toBe(true);
+    expect(info.capabilities!.cluster).toBe(true);
+    expect(info.capabilities!.search).toBe(true);
+    expect(info.capabilities!.modules).toBe(true);
   });
   test("unknown server yields unknown flavor and no capabilities", () => {
     const info = detectDataSourceInfo("# Server\r\nfoo:bar");

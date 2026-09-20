@@ -128,9 +128,9 @@ export interface Capabilities {
 }
 
 export interface DataSourceInfo {
-  flavor: RedisFlavor;
+  flavor?: RedisFlavor;      // redis-family drivers only
   version: string;
-  capabilities: Capabilities;
+  capabilities?: Capabilities;  // redis-family drivers only
   summary: Record<string, string | number | boolean>;  // small human-facing facts (uptime, port, memory…)
 }
 
@@ -200,7 +200,7 @@ export interface KeyOpResult {
 // Thrown by dbServer on bad path / non-read query / SQL error. HTTP layer maps
 // it to a 4xx with { error }.
 export class DbError extends Error {
-  constructor(public code: "not_found" | "not_a_database" | "not_read_only" | "multi_statement" | "sql" | "cancelled" | "timeout" | "invalid_change" | "conflict", message: string) {
+  constructor(public code: "not_found" | "not_a_database" | "not_read_only" | "multi_statement" | "sql" | "cancelled" | "timeout" | "invalid_change" | "conflict" | "command_error", message: string) {
     super(message);
     this.name = "DbError";
   }

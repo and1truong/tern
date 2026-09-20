@@ -34,7 +34,7 @@ describe("driver session + detection", () => {
     const info = await makeRedisDriver(factory).test({ url: URL });
     expect(info.flavor).toBe("redis");
     expect(info.version).toBe("7.2.4");
-    expect(info.capabilities.streams).toBe(true);
+    expect(info.capabilities!.streams).toBe(true);
     expect(info.summary.totalKeys).toBe(2);
   });
 

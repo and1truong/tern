@@ -83,17 +83,36 @@ async function detectInfo(transport: SessionTransport): Promise<DataSourceInfo> 
   return detectDataSourceInfo(raw as string | Record<string, unknown>);
 }
 
-const COMMAND_ERROR_PREFIX = /^(ERR|WRONGTYPE|NOPERM|NOAUTH|BUSYGROUP|NOGROUP|MOVED|ASK|CROSSSLOT|EXECABORT|LOADING|BUSY|READONLY|MAXRETRIES|NOSCRIPT|MINVAL|INVALID|SETROLLBACK)/i;
+const COMMAND_ERROR_PREFIX = /^(ERR|WRONGTYPE|NOPERM|NOAUTH|WRONGPASS|BUSYGROUP|NOGROUP|MOVED|ASK|CROSSSLOT|TRYAGAIN|EXECABORT|LOADING|BUSY|READONLY|MAXRETRIES|NOSCRIPT|MINVAL|INVALID|SETROLLBACK|OOM|MISCONF|MASTERDOWN|CLUSTERDOWN|BUSYKEY|NOREPLICAS|UNBLOCKED)/i;
 
 // The console shares one cached transport with the explorer: commands that
-// retarget or monopolize that connection are refused (the toolbar db selector
-// is the way to change databases — it opens a dedicated session).
+// retarget, re-authenticate, queue, or monopolize that connection are refused
+// (the toolbar db selector is the way to change databases — it opens a
+// dedicated session).
 const UNSHARED_CONNECTION_COMMANDS: Record<string, string> = {
   SELECT: "use the toolbar database selector instead",
   SWAPDB: "it swaps databases for every connection on this server",
   SUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
   PSUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
+  SSUBSCRIBE: "it holds the shared connection in subscribe mode; the console has no message consumer",
+  RESET: "it resets the shared connection's state for every user of this session",
+  QUIT: "it closes the shared connection for every user of this session",
+  AUTH: "credentials belong to the connection profile, not the console",
+  HELLO: "it re-authenticates or switches protocol on the shared connection",
+  ASKING: "it retargets the shared connection's cluster routing",
+  READONLY: "it sets cluster read flags on the shared connection",
+  READWRITE: "it sets cluster read flags on the shared connection",
+  MONITOR: "it turns the shared connection into an event stream, desyncing every later reply",
+  MULTI: "transactions queue on the shared connection and corrupt concurrent requests",
+  EXEC: "transactions queue on the shared connection and corrupt concurrent requests",
+  DISCARD: "transactions queue on the shared connection and corrupt concurrent requests",
+  WATCH: "transactions queue on the shared connection and corrupt concurrent requests",
+  UNWATCH: "transactions queue on the shared connection and corrupt concurrent requests",
 };
+
+// CLIENT subcommands that corrupt the shared transport (suppressed or push
+// replies) or stall the server. Read subcommands (LIST, INFO, ID, …) run fine.
+const UNSHARED_CLIENT_SUBCOMMANDS = /^(REPLY|TRACKING|PAUSE)$/i;
 
 function toDbError(error: unknown): DbError {
   const message = error instanceof Error ? error.message : String(error);
@@ -132,6 +151,9 @@ function makeConsoleProvider(transport: SessionTransport): ConsoleProvider {
       const unshared = UNSHARED_CONNECTION_COMMANDS[name];
       if (unshared) {
         return { reply: { t: "err", s: `ERR ${name} is refused by Tern: ${unshared}` }, ms: 0 };
+      }
+      if (name === "CLIENT" && UNSHARED_CLIENT_SUBCOMMANDS.test(args[0] ?? "")) {
+        return { reply: { t: "err", s: `ERR CLIENT ${args[0]!.toUpperCase()} is refused by Tern: it corrupts the shared connection's reply stream` }, ms: 0 };
       }
       const started = performance.now();
       let reply: unknown;
@@ -190,30 +212,30 @@ const STRING_MAX_BYTES = 1_000_000;
 function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo): KeyValueExplorerProvider {
   const version = info.version;
 
-  // Redis command rejections are tagged so keyOp can turn them into
-  // KeyOpResult errors while transport failures propagate to the router
-  // (which evicts and closes the broken session).
-  const commandErrors = new WeakSet<DbError>();
-
+  // Redis command rejections carry the "command_error" code so keyOp can turn
+  // them into KeyOpResult errors and the router can tell them apart from
+  // transport failures (which evict and close the broken session).
   const send = async (command: string, args: string[]): Promise<unknown> => {
     try { return await transport.send(command, args); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (COMMAND_ERROR_PREFIX.test(message)) {
-        const dbError = new DbError("sql", sanitize(message));
-        commandErrors.add(dbError);
-        throw dbError;
-      }
+      if (COMMAND_ERROR_PREFIX.test(message)) throw new DbError("command_error", sanitize(message));
       throw toDbError(error);
     }
   };
 
+  // Auxiliary probes (TTL, MEMORY USAGE, cardinalities) tolerate command
+  // rejections — e.g. MEMORY USAGE denied by ACL — but transport failures must
+  // still propagate so the router can evict the broken session.
   const number = async (command: string, args: string[]): Promise<number | null> => {
     try {
       const raw = await transport.send(command, args);
       const n = typeof raw === "number" ? raw : Number(raw);
       return Number.isFinite(n) ? n : null;
-    } catch { return null; }
+    } catch (error) {
+      if (error instanceof DbError && error.code === "command_error") return null;
+      throw error;
+    }
   };
 
   return {
@@ -229,7 +251,13 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
       const keys = (raw[1] as unknown[]).map(String);
       const typed = await Promise.all(keys.map(async key => {
         try { return { key, type: String(await transport.send("TYPE", [key])) }; }
-        catch { return { key, type: "unknown" }; }
+        catch (error) {
+          // A per-key TYPE rejection (e.g. ACL) degrades to "unknown" for
+          // that key; a transport failure must fail the whole page.
+          const message = error instanceof Error ? error.message : String(error);
+          if (COMMAND_ERROR_PREFIX.test(message)) return { key, type: "unknown" };
+          throw error;
+        }
       }));
       return { cursor: String(raw[0]), keys: typed };
     },
@@ -255,7 +283,7 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
       } catch (error) {
         // Only server-side command rejections become result errors; transport
         // failures propagate so the router can evict the broken session.
-        if (error instanceof DbError && commandErrors.has(error)) return { ok: false, error: error.message };
+        if (error instanceof DbError && error.code === "command_error") return { ok: false, error: error.message };
         throw error;
       }
     },
@@ -293,7 +321,8 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
       }
       case "list": {
         const start = cursor !== undefined && /^\d+$/.test(cursor) ? Number(cursor) : 0;
-        const items = ((await send("LRANGE", [key, String(start), String(start + PAGE_SIZE - 1)])) as unknown[] ?? []).map(String);
+        const rawItems = await send("LRANGE", [key, String(start), String(start + PAGE_SIZE - 1)]);
+        const items = (Array.isArray(rawItems) ? rawItems : []).map(String);
         return { kind: "list", items, start, truncated: start + items.length < (await number("LLEN", [key]) ?? start + items.length) };
       }
       case "stream": {
@@ -301,15 +330,15 @@ function makeExplorerProvider(transport: SessionTransport, info: DataSourceInfo)
         // paging there fetches one extra; +1 always probes for a further page.
         const count = PAGE_SIZE + 1 + (cursor !== undefined && !versionAtLeast(version, 6, 2) ? 1 : 0);
         const startId = cursor !== undefined && versionAtLeast(version, 6, 2) ? `(${cursor}` : cursor !== undefined ? cursor : "-";
-        const raw = (await send("XRANGE", [key, startId, "+", "COUNT", String(count)])) as unknown[] ?? [];
-        let fetched = raw.map(parseStreamEntry);
+        const raw = await send("XRANGE", [key, startId, "+", "COUNT", String(count)]);
+        let fetched = (Array.isArray(raw) ? raw : []).map(parseStreamEntry);
         if (cursor !== undefined && !versionAtLeast(version, 6, 2)) fetched = fetched.filter(e => streamIdAfter(e.id, cursor));
         // The cursor resumes after the last DISPLAYED entry; the extra fetched
         // entry (when requested) only proves that more pages follow.
         const hasMore = fetched.length > PAGE_SIZE;
         const entries = fetched.slice(0, PAGE_SIZE);
         const lastId = entries.length ? entries.at(-1)!.id : null;
-        return { kind: "stream", length: await number("XLEN", [key]) ?? entries.length, entries, lastId, truncated: (cursor !== undefined ? hasMore : fetched.length >= PAGE_SIZE) && lastId !== null };
+        return { kind: "stream", length: await number("XLEN", [key]) ?? entries.length, entries, lastId, truncated: hasMore && lastId !== null };
       }
       default:
         return { kind: "unknown", note: `Server type '${type}' has no viewer` };

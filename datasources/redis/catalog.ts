@@ -252,13 +252,17 @@ const BLOCKING_TIMEOUT: Record<string, "first" | "last"> = {
 export function blockingTimeoutSeconds(doc: CommandDoc, args: string[]): number | null {
   if (!doc.blocking) return null;
   if (doc.name === "XREAD" || doc.name === "XREADGROUP") {
-    const idx = args.findIndex(a => a.toUpperCase() === "BLOCK");
-    if (idx === -1 || idx + 1 >= args.length) return null;
+    // BLOCK must appear before STREAMS; a stream literally named "block" or
+    // an id "block" is not the flag.
+    const streams = args.findIndex(a => a.toUpperCase() === "STREAMS");
+    if (streams === -1) return null;
+    const idx = args.findIndex((a, i) => i < streams && a.toUpperCase() === "BLOCK");
+    if (idx === -1 || idx + 1 >= streams) return null;
     const ms = Number(args[idx + 1]);
     return Number.isFinite(ms) ? ms / 1000 : null;
   }
-  // WAIT's timeout is milliseconds on the trailing argument.
-  if (doc.name === "WAIT") {
+  // WAIT/WAITAOF's timeout is milliseconds on the trailing argument.
+  if (doc.name === "WAIT" || doc.name === "WAITAOF") {
     const ms = Number(args.at(-1));
     return Number.isFinite(ms) ? ms / 1000 : null;
   }
@@ -278,6 +282,9 @@ export function argRoles(doc: CommandDoc, args: string[]): { token: string; spec
   if (!specs.length) return args.map(token => ({ token, spec: null }));
   const roles: { token: string; spec: CommandArgSpec | null }[] = [];
   let token = 0;
+  // A consumed "numkeys" argument bounds the variadic spec that follows
+  // (EVAL's keys, ZUNIONSTORE's sources, LMPOP's keys).
+  let numkeys: number | null = null;
   for (let s = 0; s < specs.length && token < args.length; s++) {
     const spec = specs[s]!;
     const next = specs[s + 1];
@@ -291,7 +298,7 @@ export function argRoles(doc: CommandDoc, args: string[]): { token: string; spec
         continue;
       }
       const interleaved = next?.interleaved === true;
-      const laterRequired = specs.slice(s + 1).filter(a => !a.optional && !a.interleaved).length;
+      const laterRequired = specs.slice(s + 1).filter(a => !a.optional && !a.interleaved && !a.multiple).length;
       const end = s === specs.length - 1 ? args.length : args.length - laterRequired;
       if (interleaved) {
         while (token < end) {
@@ -301,11 +308,30 @@ export function argRoles(doc: CommandDoc, args: string[]): { token: string; spec
         }
         s++; // the pair partner was consumed alongside
       } else {
-        const stop = Math.max(token, end);
+        let stop = Math.max(token, end);
+        if (numkeys !== null) stop = Math.min(stop, token + numkeys);
+        else if (next?.multiple) {
+          // Two consecutive variadic lists (XREAD's keys then ids) share the
+          // tail evenly.
+          stop = Math.min(stop, token + Math.ceil((args.length - token) / 2));
+        }
         for (; token < stop; token++) roles.push({ token: args[token]!, spec });
+        numkeys = null;
       }
     } else {
-      roles.push({ token: args[token]!, spec });
+      const current = args[token]!;
+      if (spec.optional && spec.enum?.length && !spec.enum.some(v => v.toUpperCase() === current.toUpperCase())) {
+        // Absent optional flag: leave the token for the next spec, and skip
+        // this flag's value spec(s) — the optional non-enum entries that
+        // follow it (e.g. SCAN's pattern after MATCH, LIMIT's offset/count).
+        while (s + 1 < specs.length && specs[s + 1]!.optional && !specs[s + 1]!.enum) s++;
+        continue;
+      }
+      roles.push({ token: current, spec });
+      if (spec.name === "numkeys") {
+        const n = Number(current);
+        numkeys = Number.isInteger(n) && n >= 0 ? n : null;
+      }
       token++;
     }
   }

@@ -2,41 +2,46 @@
 // server (console execution) and client (autocomplete/explain/lint parsing).
 import type { RespValue } from "../../shared/types.ts";
 
+// redis-cli's sdssplitargs uses C isspace() — ASCII whitespace only, so a
+// NBSP inside an argument stays part of the argument.
+const isSpace = (ch: string) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\v" || ch === "\f";
+
 // Tokenize a command line following redis-cli rules: whitespace separates
 // tokens; "double quotes" support \x hex, \n \r \t \b \a and \\ escapes plus
 // \" for a literal quote; 'single quotes' support only '' for a literal quote
-// and keep backslashes literal.
+// and keep backslashes literal. Adjacent quoted and unquoted segments
+// concatenate into one token ('a'b parses as ab), matching sdssplitargs.
 export function tokenizeCommand(input: string): string[] {
   const tokens: string[] = [];
   let i = 0;
   const n = input.length;
   while (i < n) {
-    while (i < n && /\s/.test(input[i]!)) i++;
+    while (i < n && isSpace(input[i]!)) i++;
     if (i >= n) break;
     let token = "";
-    if (input[i] === '"' || input[i] === "'") {
-      const quote = input[i++]!;
-      for (;;) {
-        if (i >= n) throw new Error(`Unmatched ${quote === '"' ? "double" : "single"} quote in command`);
-        const ch = input[i++]!;
-        if (ch === quote) {
-          if (quote === "'" && input[i] === "'") { token += "'"; i++; continue; }
-          break;
+    while (i < n && !isSpace(input[i]!)) {
+      if (input[i] === '"' || input[i] === "'") {
+        const quote = input[i++]!;
+        for (;;) {
+          if (i >= n) throw new Error(`Unmatched ${quote === '"' ? "double" : "single"} quote in command`);
+          const ch = input[i++]!;
+          if (ch === quote) {
+            if (quote === "'" && input[i] === "'") { token += "'"; i++; continue; }
+            break;
+          }
+          if (quote === '"' && ch === "\\") {
+            if (i >= n) throw new Error("Unmatched escape at end of command");
+            const esc = input[i++]!;
+            const simple: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", a: "\a", '"': '"', "\\": "\\" };
+            if (esc === "x") {
+              const hex = input.slice(i, i + 2);
+              if (!/^[0-9a-fA-F]{2}$/.test(hex)) throw new Error("Invalid \\x escape in command");
+              token += String.fromCharCode(parseInt(hex, 16)); i += 2;
+            } else if (esc in simple) token += simple[esc]!;
+            else throw new Error(`Unsupported escape \\${esc} in command`);
+          } else token += ch;
         }
-        if (quote === '"' && ch === "\\") {
-          if (i >= n) throw new Error("Unmatched escape at end of command");
-          const esc = input[i++]!;
-          const simple: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", a: "\a", '"': '"', "\\": "\\" };
-          if (esc === "x") {
-            const hex = input.slice(i, i + 2);
-            if (!/^[0-9a-fA-F]{2}$/.test(hex)) throw new Error("Invalid \\x escape in command");
-            token += String.fromCharCode(parseInt(hex, 16)); i += 2;
-          } else if (esc in simple) token += simple[esc]!;
-          else throw new Error(`Unsupported escape \\${esc} in command`);
-        } else token += ch;
-      }
-    } else {
-      while (i < n && !/\s/.test(input[i]!)) { token += input[i++]!; }
+      } else token += input[i++]!;
     }
     tokens.push(token);
   }
@@ -53,7 +58,9 @@ export function encodeRESP(value: unknown): RespValue {
     case "string": return { t: "str", s: value };
     case "boolean": return { t: "bool", b: value };
     case "bigint": return { t: "big", s: value.toString() };
-    case "number": return Number.isInteger(value) ? { t: "int", n: value } : { t: "dbl", n: value };
+    case "number": return Number.isInteger(value) ? { t: "int", n: value }
+      // JSON cannot carry NaN/Infinity; render them as plain text instead.
+      : Number.isFinite(value) ? { t: "dbl", n: value } : { t: "str", s: String(value) };
   }
   if (value instanceof Uint8Array) return { t: "str", s: new TextDecoder("utf-8", { fatal: false }).decode(value) };
   if (Array.isArray(value)) return { t: "arr", items: value.map(encodeRESP) };
