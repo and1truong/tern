@@ -8,13 +8,14 @@ Guidance for coding agents working in this repository.
 
 ## Layout
 
-- `server/` — Bun HTTP server and database engines. `app.ts` is the entry point (driver registry lives here); `dbServer.ts` (SQLite), `pgServer.ts` (PostgreSQL), `sqlSafety.ts`, `rowMutations.ts`, `connections.ts`, `appDatabase.ts` (app state in `~/.tern/app.sqlite`).
-- `datasources/` — pluggable backends behind `contracts.ts` (`DataSourceDriver`) and `router.ts`. `redis/` is the Redis/Valkey driver family.
-- `src/` — React UI (document-area workbench: tables, SQL editor, Redis explorer/console).
+- `server/` — Bun HTTP server entry and app-level policy. `app.ts` is the entry point (driver registry, writable/opened-file/migration gating); `routeHandlers.ts` (SQLite create + connection CRUD), `connections.ts`, `migrations.ts`, `appDatabase.ts` (app state in `~/.tern/app.sqlite`), `legacyMigration.ts`.
+- `datasources/` — pluggable backends behind `contracts.ts` (`DataSourceDriver` + capability providers) and `router.ts` (unified `/api/datasource/*` dispatch). One family per engine: `sqlite/`, `postgres/`, `redis/` (Redis + Valkey).
+- `shared/` — isomorphic modules imported by both server and browser: `types.ts`, `sqlSafety.ts`, `rowMutations.ts`, `migrationSafety.ts`, `sqlConsole.ts`, `sqlIdentifiers.ts`, `dataGrid.ts`, `dataTransfer.ts`, `dbFilter.ts`, `binaryValues.ts`.
+- `src/` — React UI (document-area workbench). Focused modules per surface: `ObjectTree`, `DataGrid` + `gridDialogs`/`stagedRows` (staged-write lifecycle), `StructurePane`/`PragmasPane`/`SchemaDiagramPane`/`InsightsPane`, `SqlEditor`, Redis `KeyExplorer`/`KeyView`/`Console`.
 - `scripts/` — `dev.ts`, `build.ts`, UI smoke scripts, `verify-postgres.ts`, `verify-redis.ts`.
 - `e2e/` — Playwright e2e (`postgres.e2e.ts`, `seed.sql`).
 - `docs/` — `architecture.md`, `verification.md`.
-- `server.ts` — production entry. `shared.ts` — isomorphic helpers.
+- `server.ts` — production entry.
 
 ## Commands
 

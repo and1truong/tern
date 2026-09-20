@@ -1,8 +1,10 @@
 # Standalone Tern
 
-Retain `server/dbServer.ts`, `server/pgServer.ts`, SQL safety, row mutation compilation,
-and the data-grid, filter, transfer, SQL editor and catalog helpers. Their existing
-transaction and conflict semantics remain the database boundary.
+Retain the SQLite and PostgreSQL engines (now the `datasources/sqlite/` and
+`datasources/postgres/` driver families), SQL safety, row mutation compilation,
+and the data-grid, filter, transfer, SQL editor and catalog helpers under
+`shared/`. Their existing transaction and conflict semantics remain the
+database boundary.
 
 Remove module activation, the vendored host contract, host navigation and KV, and
 current-directory discovery. A loopback Bun HTTP server owns explicit database APIs
@@ -33,12 +35,28 @@ around native negotiation stalls without weakening required/verified TLS modes.
 
 Backends plug in through `datasources/contracts.ts`: a `DataSourceDriver` owns
 its protocol client, connection validation, server detection and capability
-providers. The core app never branches on a product name — it dispatches
-`/api/datasource/*` through `datasources/router.ts`, which resolves a saved
-profile's driver from the static registry in `server/app.ts` and serves
-whatever capability providers that driver exposes (`console`, `explorer`).
-Composition over one giant interface: drivers implement only the providers
-they support, and generic UI renders what is present.
+providers. The core app never branches on a product name — all data endpoints
+dispatch through `datasources/router.ts` under `/api/datasource/*`, which
+resolves a saved profile's driver (or an explicit SQLite path) from the static
+registry in `server/app.ts` and serves whatever capability providers that
+driver exposes: `relational` (schema, query/exec, explain, migrations, staged
+row apply, insights), `console` (command execution + catalog), and `explorer`
+(key-value scan/inspect/ops). Composition over one giant interface: drivers
+implement only the providers they support, and generic UI renders what is
+present.
+
+The router owns session lifecycle: sessions are cached per connection, failed
+connects are evicted, transport errors close and evict live sessions, and
+logical errors keep them. Relational drivers mark their sessions `stateless`
+— SQLite and PostgreSQL open a fresh client per operation — so provider
+errors never invalidate the cached logical session.
+
+`server/app.ts` keeps only policy at the seam: session-scoped writable access,
+the SQLite opened-file gate, exact-script migration validation, host/origin
+checks, and connection CRUD. Everything data-shaped delegates to the router.
+
+Isomorphic code lives in `shared/` and must stay free of runtime-specific
+imports — server engines, the router, and the browser bundle all consume it.
 
 The Redis-compatible driver (`datasources/redis/`) is one driver family for
 Redis and Valkey: it connects over RESP, detects flavor/version/capabilities
