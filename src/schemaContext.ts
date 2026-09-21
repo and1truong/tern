@@ -9,9 +9,10 @@ export function schemaPreferenceKey(source: Extract<DbSource, { kind: 'postgres'
   const database = source.database ?? (() => { try { return decodeURIComponent(new URL(source.url).pathname.slice(1)); } catch { return ''; } })();
   return JSON.stringify([source.connId, database]);
 }
+const isPreferenceKey = (key: string) => { try { const parsed: unknown = JSON.parse(key); return Array.isArray(parsed) && parsed.length === 2 && parsed.every(part => typeof part === 'string'); } catch { return false; } };
 export function readSchemaPreferences(value: unknown): Record<string, SchemaPreference> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item && typeof item === 'object'
+  return Object.fromEntries(Object.entries(value).filter(([key, item]) => isPreferenceKey(key) && item && typeof item === 'object'
     && typeof item.showSystem === 'boolean' && (item.schema === undefined || typeof item.schema === 'string')));
 }
 export function filterSchemaCatalog(catalog: DbSchema, selected?: string, showSystem = false): DbSchema {

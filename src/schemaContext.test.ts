@@ -32,7 +32,8 @@ test('preferences identify the effective database and validate persisted state',
   expect(schemaPreferenceKey(source)).not.toBe(schemaPreferenceKey({ ...source, database: 'another' }));
   // A redacted or malformed url must not crash the render path.
   expect(schemaPreferenceKey({ ...source, url: '(invalid url)' })).toBe(JSON.stringify(['one', '']));
-  expect(readSchemaPreferences({ a: { schema: 'billing', showSystem: false }, b: { schema: 1 }, c: null })).toEqual({ a: { schema: 'billing', showSystem: false } });
+  const key = schemaPreferenceKey(source);
+  expect(readSchemaPreferences({ [key]: { schema: 'billing', showSystem: false }, bogus: { showSystem: true }, b: { schema: 1 }, c: null })).toEqual({ [key]: { schema: 'billing', showSystem: false } });
   expect(isDocuments({ active: 'q', tabs: [{ id: 'q', kind: 'sql', title: 'Query', source: { ...source, schema: 'billing' } }] })).toBe(true);
   // isDocuments validates the container; a doc with a malformed schema is
   // dropped by the per-document filter at restore, not the whole tab set.
