@@ -325,7 +325,7 @@ export function App() {
       writableRef.current = prune(writableRef.current);
       systemCatalogs.current = new Set([...systemCatalogs.current].filter(key => !stale(key)));
       for (const key of catalogRequests.current.keys()) if (stale(key)) catalogRequests.current.delete(key);
-      if (s.kind === 'postgres') preferences.current = Object.fromEntries(Object.entries(preferences.current).filter(([key]) => (JSON.parse(key) as string[])[0] !== s.connId));
+      if (s.kind === 'postgres') { preferences.current = Object.fromEntries(Object.entries(preferences.current).filter(([key]) => (JSON.parse(key) as string[])[0] !== s.connId)); setPreferenceVersion(v => v + 1); }
     } catch (e) { setError(String(e)); }
   };
   return <main className="workbench" onPointerDown={e => { if (!(e.target as Element).closest('.menubar')) e.currentTarget.querySelectorAll<HTMLDetailsElement>('.menubar details[open]').forEach(d => { d.open = false; }); }}>
