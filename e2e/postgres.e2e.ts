@@ -197,7 +197,7 @@ test('saved writable default applies on connect and reload but refresh preserves
   await expect(page.getByRole('button', { name: '● Writable', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '● Writable', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Read Only', exact: true })).toBeVisible();
-  const catalog = page.waitForResponse(response => response.url().includes('/api/schema'));
+  const catalog = page.waitForResponse(response => response.url().includes('/api/datasource/schema'));
   await page.getByRole('button', { name: 'Refresh catalog', exact: true }).click();
   await catalog;
   await expect(page.getByRole('button', { name: 'Read Only', exact: true })).toBeVisible();
