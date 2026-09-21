@@ -4,7 +4,10 @@ import type { DbSource } from './dbApi.ts';
 export interface SchemaPreference { schema?: string; showSystem: boolean }
 export function isSystemSchema(name: string) { return name.startsWith('pg_') || name === 'information_schema'; }
 export function schemaPreferenceKey(source: Extract<DbSource, { kind: 'postgres' }>) {
-  return JSON.stringify([source.connId, source.database ?? decodeURIComponent(new URL(source.url).pathname.slice(1))]);
+  // source.url can be a redacted "(invalid url)" or a malformed persisted
+  // document — fall back to "" rather than crashing render.
+  const database = source.database ?? (() => { try { return decodeURIComponent(new URL(source.url).pathname.slice(1)); } catch { return ''; } })();
+  return JSON.stringify([source.connId, database]);
 }
 export function readSchemaPreferences(value: unknown): Record<string, SchemaPreference> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};

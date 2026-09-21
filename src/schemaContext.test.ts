@@ -30,6 +30,8 @@ test('preferences identify the effective database and validate persisted state',
   const source = { kind: 'postgres' as const, connId: 'one', url: 'postgres://localhost/my%20db', label: '', readOnly: true, environment: 'local' as const };
   expect(schemaPreferenceKey(source)).toBe(schemaPreferenceKey({ ...source, database: 'my db' }));
   expect(schemaPreferenceKey(source)).not.toBe(schemaPreferenceKey({ ...source, database: 'another' }));
+  // A redacted or malformed url must not crash the render path.
+  expect(schemaPreferenceKey({ ...source, url: '(invalid url)' })).toBe(JSON.stringify(['one', '']));
   expect(readSchemaPreferences({ a: { schema: 'billing', showSystem: false }, b: { schema: 1 }, c: null })).toEqual({ a: { schema: 'billing', showSystem: false } });
   expect(isDocuments({ active: 'q', tabs: [{ id: 'q', kind: 'sql', title: 'Query', source: { ...source, schema: 'billing' } }] })).toBe(true);
   // isDocuments validates the container; a doc with a malformed schema is
