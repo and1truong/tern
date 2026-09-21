@@ -34,12 +34,12 @@ export function makePostgresDriver(): DataSourceDriver {
           const result = await runPgQuery(url, "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname", [], 1000);
           return result.rows.map(row => String(row.datname));
         },
-        schema: (signal) => readPgSchema(url, signal),
+        schema: (signal, includeSystem) => readPgSchema(url, signal, includeSystem),
         insights: (signal) => readPgInsights(url, signal),
-        query: (q, signal) => runPgQuery(url, q.sql, q.params ?? [], q.limit, q.offset, signal, q.timeoutMs, q.exportAll === true),
-        explain: (q, signal) => explainPgQuery(url, q.sql, q.params ?? [], signal, q.timeoutMs),
-        exec: (sql, writable, signal, timeoutMs) => runPgExec(url, sql, signal, timeoutMs, !writable),
-        migrate: (sql, apply, signal, timeoutMs) => runPgMigration(url, sql, apply, timeoutMs, signal),
+        query: (q, signal) => runPgQuery(url, q.sql, q.params ?? [], q.limit, q.offset, signal, q.timeoutMs, q.exportAll === true, q.schema),
+        explain: (q, signal) => explainPgQuery(url, q.sql, q.params ?? [], signal, q.timeoutMs, q.schema),
+        exec: (sql, writable, signal, timeoutMs, schema) => runPgExec(url, sql, signal, timeoutMs, !writable, schema),
+        migrate: (sql, apply, signal, timeoutMs, schema) => runPgMigration(url, sql, apply, timeoutMs, signal, schema),
         applyRows: (changes, signal, timeoutMs) => runPgRowChanges(url, changes, signal, timeoutMs),
       };
       return {

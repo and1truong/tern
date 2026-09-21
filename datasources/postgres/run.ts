@@ -1,6 +1,7 @@
 // Statement runners: read queries in a READ ONLY transaction with bounded
 // limits, batch exec (optionally engine-enforced read-only), transactional
 // migrations and staged row changes. All open per call and close in a finally.
+import type { SQL } from "bun";
 import { open } from "./connect.ts";
 import { controlledPg } from "./cancel.ts";
 import { toPgPlaceholders } from "./placeholders.ts";
@@ -13,6 +14,22 @@ import type { QueryResult, ExecResult, RowChange, RowMutationResult, ConnectionT
 
 const DEFAULT_LIMIT = 1000;
 const HARD_LIMIT = 10000;
+
+// Each runner owns and closes its connection. Session-level configuration also
+// survives explicit COMMIT/ROLLBACK inside scripts; it never reaches another request.
+export async function applyPgSchema(connection: Pick<Awaited<ReturnType<SQL['reserve']>>, 'unsafe'>, schema?: string) {
+  if (schema === undefined) return; // Preserve the server default for legacy documents.
+  if (typeof schema !== 'string' || !schema || schema.includes('\0') || new TextEncoder().encode(schema).length > 63) {
+    throw new DbError('sql', 'Invalid schema name');
+  }
+  const rows = await connection.unsafe(`SELECT nspname FROM pg_catalog.pg_namespace
+    WHERE nspname = $1 AND pg_catalog.has_schema_privilege(oid, 'USAGE')`, [schema]);
+  if (!rows.length) throw new DbError('sql', `Schema "${schema}" does not exist or is not accessible. Select another schema.`);
+  // pg_catalog remains implicitly first. pg_temp is explicitly last so temporary
+  // relations cannot shadow the selected schema. No fallback to public/$user.
+  const path = `"${schema.replace(/"/g, '""')}", pg_temp`;
+  await connection.unsafe("SELECT pg_catalog.set_config('search_path', $1, false)", [path]);
+}
 
 function affectedOf(rows: unknown[]): number {
   const n = (rows as unknown as { count?: number }).count;
@@ -28,6 +45,7 @@ export async function runPgQuery(
   signal?: AbortSignal,
   timeoutRaw?: number,
   exportAll = false,
+  schema?: string,
 ): Promise<QueryResult> {
   const limit = exportAll ? 100_000 : Math.min(Math.max(Math.floor(limitRaw ?? DEFAULT_LIMIT), 1), HARD_LIMIT);
   const offset = exportAll ? 0 : Math.max(Math.floor(offsetRaw ?? 0), 0);
@@ -38,6 +56,7 @@ export async function runPgQuery(
   const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   let inTransaction = false;
   try {
+    await applyPgSchema(connection, schema);
     await connection.unsafe("BEGIN READ ONLY");
     inTransaction = true;
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
@@ -95,6 +114,7 @@ export async function explainPgQuery(
   params: unknown[],
   signal?: AbortSignal,
   timeoutRaw?: number,
+  schema?: string,
 ): Promise<QueryResult> {
   const normalized = assertReadOnlySql(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
@@ -103,6 +123,7 @@ export async function explainPgQuery(
   const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   let inTransaction = false;
   try {
+    await applyPgSchema(connection, schema);
     await connection.unsafe("BEGIN READ ONLY");
     inTransaction = true;
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
@@ -124,13 +145,14 @@ export async function explainPgQuery(
   }
 }
 
-export async function runPgExec(url: string, sql: string, signal?: AbortSignal, timeoutRaw = 30_000, readOnly = false): Promise<ExecResult> {
+export async function runPgExec(url: string, sql: string, signal?: AbortSignal, timeoutRaw = 30_000, readOnly = false, schema?: string): Promise<ExecResult> {
   if (readOnly) assertReadOnlyScript(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
   // A failed reservation must not leak the freshly opened client.
   const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   try {
+    await applyPgSchema(connection, schema);
     if (readOnly) await connection.unsafe("SET default_transaction_read_only = on");
     // Server-side backstop — a failed cancel-control connection must not
     // leave the exec running on the pooled socket indefinitely.
@@ -164,7 +186,7 @@ export async function runPgExec(url: string, sql: string, signal?: AbortSignal, 
   }
 }
 
-export async function runPgMigration(url: string, sql: string, apply: boolean, timeoutRaw?: number, signal?: AbortSignal): Promise<MigrationResult> {
+export async function runPgMigration(url: string, sql: string, apply: boolean, timeoutRaw?: number, signal?: AbortSignal, schema?: string): Promise<MigrationResult> {
   const script = validateMigrationSql(sql);
   const timeoutMs = Math.min(Math.max(Math.floor(timeoutRaw ?? 30_000), 1_000), 300_000);
   const db = await open(url);
@@ -173,6 +195,7 @@ export async function runPgMigration(url: string, sql: string, apply: boolean, t
   const t0 = performance.now();
   let transaction = false;
   try {
+    await applyPgSchema(connection, schema);
     await connection.unsafe("BEGIN");
     transaction = true;
     await connection.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);

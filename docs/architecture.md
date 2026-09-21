@@ -96,3 +96,41 @@ upgrading. User-authored SQL and JSON are never rewritten during migration.
 
 `README.md` and `assets/` retain the approved versions already on this PR. Historical Git objects,
 external dependencies, and the existing checkout directory name are not rewritten.
+
+## PostgreSQL schema context
+
+The toolbar's Schema selector scopes the object explorer and the source captured
+by new SQL/migration documents. Existing documents retain their source, including
+the schema, across selector changes and restarts. Clicking an existing document
+shows its context again. To use another schema, select it and open a new document.
+Preferences are stored per connection and effective database. “All schemas” only
+broadens the explorer; queries without an explicit schema use the server's default
+search path. SQLite does not participate in schema selection.
+
+Catalog namespace discovery uses `pg_namespace` and checks `USAGE`, so empty
+schemas remain selectable. System namespaces are hidden by default. Enabling
+System loads their objects; the catalog stays cached for already-open documents,
+while the explorer can hide those objects again. A dropped/inaccessible selection
+remains visible as unavailable, rather than silently changing the target schema.
+
+Every SQL request carries its document's schema. Query, script, explain,
+pagination, query export and migration execution validate the namespace and set
+`search_path` on the same reserved connection that executes the SQL. The selected
+identifier is quoted and passed as a parameter to `pg_catalog.set_config`.
+The path is `"selected schema", pg_temp`: PostgreSQL implicitly searches
+`pg_catalog` first, the selected schema next, and temporary relations last. There
+is no automatic `public` or `$user` fallback. Fully qualified references keep
+working, and this selection does not grant additional database permissions.
+
+Each request owns and closes its connection, including failures/cancellation.
+Session-level configuration survives explicit transaction boundaries within one
+script but cannot leak to another request. A script can explicitly change its own
+search path; the next request starts from the document's selected context again.
+Generated table operations retain fully qualified table names. Migration dry-run
+approval binds both the exact SQL and schema, preventing a preview in one schema
+from authorizing an apply in another.
+
+Validation: `bun test`, `bun run typecheck`, and `bun run test:ui`. Set
+`TEST_PG_URL` to a disposable PostgreSQL database to run the native driver tests,
+including concurrent schema isolation and migration approval. The tests create
+and remove their own schemas.

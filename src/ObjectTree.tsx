@@ -59,6 +59,7 @@ export function ObjectTree({ schema, activeTable, onSelect, locked }: {
         <input aria-label="Search database objects" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find objects…"
           className="min-w-0 w-full bg-transparent text-xs text-[var(--text)] outline-none" />
       </label>
+      {!schema.tables.length && !schema.routines?.length && !schema.sequences?.length && <div className="p-3 text-xs text-[var(--text-muted)]">No objects in this schema.</div>}
       {groups.map((group) => (
         <div key={group.name || "main"}>
           {schemaNames.length > 1 && <div className="px-3 py-1.5 border-y border-[var(--border)] bg-[var(--bg)] mono text-[10px] font-bold text-[var(--accent)]">{group.name || "main"}</div>}

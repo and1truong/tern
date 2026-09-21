@@ -41,18 +41,21 @@ export interface RelationalQuery {
   offset?: number;
   timeoutMs?: number;
   exportAll?: boolean;
+  schema?: string;              // postgres search_path pinned by the document
 }
 
 // Relational engines (sqlite, postgres). Sessions hold resolved config, not a
 // live connection — engines open per call (pg) or per subprocess (sqlite).
+// `schema` selects the postgres namespace (search_path); engines without
+// namespaces ignore it.
 export interface RelationalProvider {
   databases?(): Promise<string[]>;                     // postgres only
-  schema(signal?: AbortSignal): Promise<DbSchema>;
+  schema(signal?: AbortSignal, includeSystem?: boolean): Promise<DbSchema>;
   insights(signal?: AbortSignal): Promise<DatabaseInsights>;
   query(q: RelationalQuery, signal?: AbortSignal): Promise<QueryResult>;
   explain(q: RelationalQuery, signal?: AbortSignal): Promise<QueryResult>;
-  exec(sql: string, writable: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<ExecResult>;
-  migrate(sql: string, apply: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<MigrationResult>;
+  exec(sql: string, writable: boolean, signal?: AbortSignal, timeoutMs?: number, schema?: string): Promise<ExecResult>;
+  migrate(sql: string, apply: boolean, signal?: AbortSignal, timeoutMs?: number, schema?: string): Promise<MigrationResult>;
   applyRows(changes: RowChange[], signal?: AbortSignal, timeoutMs?: number): Promise<RowMutationResult>;
 }
 

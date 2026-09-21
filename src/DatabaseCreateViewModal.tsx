@@ -1,3 +1,4 @@
+import { querySchemaLabel } from "./schemaContext.ts";
 import { useState } from "react";
 import { X, Database as DbIcon, Play } from "lucide-react";
 import Notice from "./Notice.tsx";
@@ -61,6 +62,7 @@ export function DatabaseCreateViewModal({ source, onClose, onCreated }: {
         </div>
 
         <div className="p-4 flex flex-col gap-3 overflow-auto">
+          {source.kind === "postgres" && <div>Query schema: {querySchemaLabel(source)}</div>}
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-[var(--muted)] w-16">Name</span>
             <input autoFocus value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} placeholder="adults"

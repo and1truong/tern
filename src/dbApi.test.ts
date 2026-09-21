@@ -86,3 +86,29 @@ test('failed state deletion allows saving and retrying', async () => {
     expect(sent).toEqual(['DELETE', 'POST', 'DELETE']);
   } finally { globalThis.fetch = original; }
 });
+
+test('all SQL execution requests carry the pinned schema, including paging and export', async () => {
+  const original = globalThis.fetch;
+  const requests: { url: string; body: any }[] = [];
+  const source = { kind: 'postgres' as const, connId: 'one', database: 'db', schema: 'Odd " Schema', label: '', url: '', environment: 'local' as const, readOnly: true };
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ url: String(input), body: JSON.parse(String(init?.body ?? '{}')) });
+    return Response.json({});
+  }) as typeof fetch;
+  try {
+    await dbApi.query(source, 'SELECT * FROM users', [], 10, 20);
+    await dbApi.exportAll(source, 'SELECT * FROM users', []);
+    await dbApi.explain(source, 'SELECT * FROM users');
+    await dbApi.exec(source, 'SELECT 1', false);
+    await dbApi.migration.preview(source, 'CREATE TABLE t(id int)');
+    await dbApi.migration.apply(source, 'CREATE TABLE t(id int)');
+    expect(requests).toHaveLength(6);
+    for (const request of requests) expect(request.body).toMatchObject({ connId: 'one', database: 'db', schema: source.schema });
+    expect(requests[0].body.offset).toBe(20);
+    expect(requests[1].body.exportAll).toBe(true);
+    await dbApi.query({ kind: 'sqlite', path: '/test' }, 'SELECT 1', [], 10);
+    expect(requests[6].body).not.toHaveProperty('schema');
+    await dbApi.schema(source, true);
+    expect(requests[7].url).toContain('includeSystem=true');
+  } finally { globalThis.fetch = original; }
+});

@@ -35,14 +35,20 @@ export function collectPgKeyMetadata(rows: Record<string, unknown>[]) {
   return { primary, foreign, uniqueGroups };
 }
 
-export async function readPgSchema(url: string, signal?: AbortSignal): Promise<DbSchema> {
+export async function readPgSchema(url: string, signal?: AbortSignal, includeSystem = false): Promise<DbSchema> {
   const db = await open(url);
   // A failed reservation must not leak the freshly opened client.
   const connection = await db.reserve().catch(async (error) => { await db.close().catch(() => {}); throw error; });
   const query = (sql: string) => awaitControlled(connection.unsafe(sql) as CancellableQuery<Record<string, unknown>[]>, signal, INTROSPECT_TIMEOUT_MS);
   try {
     await query(`SET statement_timeout = ${INTROSPECT_TIMEOUT_MS}`);
-    // Tables + views in user schemas, with column lists in one shot.
+    // Namespace discovery includes empty schemas and only usable namespaces.
+    const namespaceRows = await query(`SELECT nspname AS name FROM pg_catalog.pg_namespace
+      WHERE pg_catalog.has_schema_privilege(oid, 'USAGE') ORDER BY nspname`);
+    const schemas = namespaceRows.map(row => String(row.name));
+    // This fragment contains only fixed identifiers and a boolean, never user input.
+    const namespaceFilter = (column: string) => `pg_catalog.has_schema_privilege(${column}, 'USAGE')${includeSystem ? "" : ` AND ${column} !~ '^pg_' AND ${column} <> 'information_schema'`}`;
+    // Tables + views with column lists in one shot.
     const cols = await query(
       `SELECT t.table_schema, t.table_name, c.column_name, format_type(a.atttypid, a.atttypmod) AS data_type,
               c.is_nullable, c.ordinal_position, c.column_default, a.attislocal,
@@ -67,7 +73,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          LEFT JOIN pg_type typ ON typ.oid = a.atttypid
          LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
          LEFT JOIN pg_namespace cn ON cn.oid = coll.collnamespace
-        WHERE t.table_schema NOT IN ('pg_catalog','information_schema')
+        WHERE ${namespaceFilter("t.table_schema")}
           AND t.table_type IN ('BASE TABLE','VIEW','FOREIGN')
         ORDER BY t.table_schema, t.table_name, c.ordinal_position`,
     ) as Record<string, unknown>[];
@@ -83,7 +89,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          JOIN pg_namespace n ON n.oid = c.relnamespace
          LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
          LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
-        WHERE c.relkind = 'm' AND n.nspname NOT IN ('pg_catalog','information_schema')
+        WHERE c.relkind = 'm' AND ${namespaceFilter("n.nspname")}
         ORDER BY n.nspname, c.relname, a.attnum`,
     ) as Record<string, unknown>[];
     cols.push(...materializedColumns);
@@ -91,7 +97,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
     const materializedDefinitions = await query(
       `SELECT schemaname AS table_schema, matviewname AS table_name, definition, ispopulated
          FROM pg_matviews
-        WHERE schemaname NOT IN ('pg_catalog','information_schema')`,
+        WHERE ${namespaceFilter("schemaname")} `,
     ) as Record<string, unknown>[];
     const materializedDdl = new Map(materializedDefinitions.map((row) => [
       `${row.table_schema}\0${row.table_name}`,
@@ -104,7 +110,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          FROM pg_views v
          JOIN pg_namespace n ON n.nspname = v.schemaname
          JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = v.viewname
-        WHERE v.schemaname NOT IN ('pg_catalog','information_schema')`,
+        WHERE ${namespaceFilter("v.schemaname")} `,
     ) as Record<string, unknown>[];
     const viewDdl = new Map(viewDefinitions.map((row) => [
       `${row.table_schema}\0${row.table_name}`,
@@ -194,7 +200,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          LEFT JOIN pg_type effective_element ON effective_element.oid = COALESCE(NULLIF(element.typbasetype, 0), element.oid)
          LEFT JOIN array_element_comparable element_comparable ON element_comparable.oid = effective_element.oid
         WHERE rel.relkind IN ('r','p','v','m','f')
-          AND n.nspname NOT IN ('pg_catalog','information_schema')`,
+          AND ${namespaceFilter("n.nspname")} `,
     ) as Record<string, unknown>[];
     const orderable = new Map(comparableRows.map(row => [`${row.table_schema}\0${row.table_name}\0${row.column_name}`, row.is_orderable === true]));
     const comparable = new Map(comparableRows.map((row) => [
@@ -217,7 +223,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          LEFT JOIN pg_namespace ref_n ON ref_n.oid = ref_rel.relnamespace
          LEFT JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS ref_key(attnum, ord) ON ref_key.ord = src_key.ord
          LEFT JOIN pg_attribute ref ON ref.attrelid = con.confrelid AND ref.attnum = ref_key.attnum
-        WHERE con.contype IN ('p','f','u') AND n.nspname NOT IN ('pg_catalog','information_schema')
+        WHERE con.contype IN ('p','f','u') AND ${namespaceFilter("n.nspname")}
         ORDER BY n.nspname, rel.relname, con.conname, src_key.ord`,
     ) as Record<string, unknown>[];
 
@@ -294,7 +300,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          JOIN pg_namespace n ON n.nspname = p.schemaname
          JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = p.indexname
          JOIN pg_index i ON i.indexrelid = c.oid
-        WHERE p.schemaname NOT IN ('pg_catalog','information_schema')
+        WHERE ${namespaceFilter("p.schemaname")}
         ORDER BY p.indexname`,
     ) as Record<string, unknown>[];
     for (const index of idx) {
@@ -316,7 +322,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          FROM pg_trigger t
          JOIN pg_class c ON c.oid = t.tgrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema')
+        WHERE NOT t.tgisinternal AND ${namespaceFilter("n.nspname")}
         ORDER BY t.tgname`,
     ) as Record<string, unknown>[];
     const triggers = trg.map((r) => ({
@@ -334,7 +340,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
          FROM pg_constraint con
          JOIN pg_class c ON c.oid = con.conrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+        WHERE ${namespaceFilter("n.nspname")}
         ORDER BY n.nspname, c.relname, con.conname`,
     ) as Record<string, unknown>[];
     const constraints = constraintRows.map((row) => ({
@@ -398,7 +404,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
       `SELECT sequence_schema AS schema, sequence_name AS name, data_type,
               start_value, minimum_value, maximum_value, increment
          FROM information_schema.sequences
-        WHERE sequence_schema NOT IN ('pg_catalog','information_schema')
+        WHERE ${namespaceFilter("sequence_schema")}
         ORDER BY sequence_schema, sequence_name`,
     ) as Record<string, unknown>[];
     const sequences = sequenceRows.map((row) => ({
@@ -413,7 +419,7 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
               pg_get_functiondef(p.oid) AS definition
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+        WHERE ${namespaceFilter("n.nspname")}
           AND p.prokind IN ('f', 'p', 'w')
         ORDER BY n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)`,
     ) as Record<string, unknown>[];
@@ -443,7 +449,6 @@ export async function readPgSchema(url: string, signal?: AbortSignal): Promise<D
       server_version: String(m.server_version ?? ""),
     };
 
-    const schemas = [...new Set(tables.map((table) => table.schema).filter((value): value is string => !!value))].sort();
     return { tables, schemas, indexes, triggers, constraints, sequences, routines, extensions, pragmas };
   } catch (e) {
     if (e instanceof DbError) throw e;

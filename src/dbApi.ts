@@ -7,11 +7,11 @@ export type RedisSource = { kind: "redis"; connId: string; database: string; lab
 
 export type DbSource =
   | { kind: "sqlite"; path: string }
-  | { kind: "postgres"; connId: string; database?: string; label: string; url: string; environment: ConnectionProfile["environment"]; readOnly: boolean }
+  | { kind: "postgres"; connId: string; database?: string; schema?: string; label: string; url: string; environment: ConnectionProfile["environment"]; readOnly: boolean }
   | RedisSource;
 
-function selector(src: DbSource): { path?: string; connId?: string; database?: string } {
-  return src.kind === "sqlite" ? { path: src.path } : { connId: src.connId, database: src.database };
+function selector(src: DbSource): { path?: string; connId?: string; database?: string; schema?: string } {
+  return src.kind === "sqlite" ? { path: src.path } : { connId: src.connId, database: src.database, schema: src.kind === "postgres" ? src.schema : undefined };
 }
 function selectorQuery(src: DbSource): string {
   return src.kind === "sqlite"
@@ -105,8 +105,8 @@ export const dbApi = {
     },
   },
   create: (path: string) => post<{ path: string; created: true }>(`${API}/create`, { path }, AbortSignal.timeout(STATE_TIMEOUT_MS)),
-  schema: (src: DbSource) =>
-    fetch(`${DS}/schema?${selectorQuery(src)}`, { signal: AbortSignal.timeout(STATE_TIMEOUT_MS) }).then(asJson<DbSchema>),
+  schema: (src: DbSource, includeSystem = false) =>
+    fetch(`${DS}/schema?${selectorQuery(src)}${includeSystem ? "&includeSystem=true" : ""}`, { signal: AbortSignal.timeout(STATE_TIMEOUT_MS) }).then(asJson<DbSchema>),
   insights: (src: DbSource) => fetch(`${DS}/insights?${selectorQuery(src)}`, { signal: AbortSignal.timeout(STATE_TIMEOUT_MS) }).then(asJson<DatabaseInsights>),
   query: (src: DbSource, sql: string, params: unknown[], limit: number, offset = 0, signal?: AbortSignal, timeoutMs = 30_000) =>
     post<QueryResult>(`${DS}/query`, { ...selector(src), sql, params, limit, offset, timeoutMs }, signal),

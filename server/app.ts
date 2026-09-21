@@ -21,7 +21,7 @@ function keyIsForConn(key: string, connId: string): boolean {
 }
 
 // Anchored on both ends — `documents_evil` must not satisfy the prefix check.
-const validStateKey = (key: string) => /^(documents|layout|preferences|sql:\S+|redis:\S+)$/.test(key);
+const validStateKey = (key: string) => /^(documents|layout|preferences|schemaPreferences|sql:\S+|redis:\S+)$/.test(key);
 
 export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?: string; drivers?: DataSourceDriver[] } = {}) {
   // Fail closed: without appPath the guard would silently drop, letting
@@ -138,6 +138,7 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
         if (typeof body.database === "string") {
           body.database = registry.get(profile.driver)?.canonicalizeDatabase?.(body.database) ?? body.database;
         }
+        if (body.schema !== undefined && (typeof body.schema !== "string" || !body.schema || body.schema.includes("\0") || new TextEncoder().encode(body.schema).length > 63)) return fail("Invalid schema name");
         key = `${body.connId}/${body.database ?? ""}`;
         connections.touch(body.connId);
       } else if (body.path) {
@@ -160,6 +161,9 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
       // All data endpoints dispatch through the datasource router; the app
       // keeps only the session policy (writable flag, opened files, and the
       // migration dry-run-before-apply contract).
+      // The dry-run grant binds the schema too — a preview in one schema must
+      // not authorize applying the same script under another search_path.
+      const migrationDigest = () => scriptHash(JSON.stringify([body.schema ?? null, body.sql]));
       if (path.startsWith("/datasource")) {
         const sub = path.slice("/datasource".length) || "/";
         if (!["GET", "POST"].includes(req.method) || (req.method !== "POST" && !GET_ROUTES.has(sub))) return fail("Not found", 404);
@@ -169,14 +173,14 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
           validated.delete(accessKey);
         } else if (sub === "/migration/apply") {
           if (!writable.has(accessKey)) return fail("Connection is read-only", 403);
-          if (typeof body.sql !== "string" || validated.get(accessKey) !== scriptHash(body.sql)) return fail("Run a successful dry run of this exact script before applying");
+          if (typeof body.sql !== "string" || validated.get(accessKey) !== migrationDigest()) return fail("Run a successful dry run of this exact script before applying");
           validated.delete(accessKey);
         }
         const result = await datasource.route({
           path: sub, body, url, signal: req.signal,
           writable: connKey => writable.has(`${session}:${connKey}`),
         });
-        if (sub === "/migration/preview" && result.ok && typeof body.sql === "string") validated.set(accessKey, scriptHash(body.sql));
+        if (sub === "/migration/preview" && result.ok && typeof body.sql === "string") validated.set(accessKey, migrationDigest());
         return result;
       }
       return fail("Not found", 404);

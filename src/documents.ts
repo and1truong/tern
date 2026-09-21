@@ -19,7 +19,7 @@ export function isDocument(d: unknown): d is Document {
     ['table', 'sql', 'diagram', 'insights', 'migration', 'settings', 'key', 'console'].includes(doc.kind) &&
     (doc.table === undefined || typeof doc.table === 'string') &&
     !!doc.source && (doc.source.kind === 'sqlite' ? typeof doc.source.path === 'string'
-      : doc.source.kind === 'postgres' ? typeof doc.source.connId === 'string' && typeof doc.source.url === 'string' && typeof doc.source.label === 'string' && (doc.source.database === undefined || typeof doc.source.database === 'string') && validFlags(doc.source)
+      : doc.source.kind === 'postgres' ? typeof doc.source.connId === 'string' && typeof doc.source.url === 'string' && typeof doc.source.label === 'string' && (doc.source.database === undefined || typeof doc.source.database === 'string') && (doc.source.schema === undefined || typeof doc.source.schema === 'string') && validFlags(doc.source)
       : doc.source.kind === 'redis' && typeof doc.source.connId === 'string' && typeof doc.source.database === 'string' && typeof doc.source.url === 'string' && typeof doc.source.label === 'string' && validFlags(doc.source));
 }
 

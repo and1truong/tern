@@ -484,4 +484,30 @@ describe("relational routes", () => {
     const res = await router.route(makeRequest("/schema", { connId: "p1" }, writable));
     expect(res.status).toBe(404);
   });
+
+  // The UI's schema GET sends includeSystem as a searchParam, which app.ts
+  // surfaces in the body as the string "true" — the router must coerce it.
+  test("/schema coerces the GET includeSystem string to a boolean", async () => {
+    let seen: boolean | undefined;
+    const { driver } = fakeDriver({
+      id: "fakerel",
+      session: {
+        relational: {
+          async schema(_signal: AbortSignal | undefined, includeSystem?: boolean) {
+            seen = includeSystem;
+            return { schemas: [], tables: [], indexes: [], triggers: [], pragmas: {} };
+          },
+        } as never,
+      },
+    });
+    const relRegistry = createDriverRegistry();
+    relRegistry.register(driver);
+    const relRouter = makeDatasourceRouter(
+      { get: async () => ({ id: "rel1", driver: "fakerel" }), resolveUrl: async () => "fakerel://x" },
+      relRegistry,
+    );
+    const res = await relRouter.route(makeRequest("/schema", { connId: "rel1", includeSystem: "true" }, writable));
+    expect(res.status).toBe(200);
+    expect(seen).toBe(true);
+  });
 });

@@ -135,6 +135,9 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
     typeof value === "number" && Number.isFinite(value) ? value : undefined;
   const sql = (body: Record<string, unknown>) => typeof body.sql === "string" ? body.sql : "";
   const params = (body: Record<string, unknown>) => Array.isArray(body.params) ? body.params : undefined;
+  // Postgres identifiers cap at 63 bytes; a schema outside that cannot name a
+  // namespace, so the driver re-checks before it ever reaches search_path.
+  const schema = (body: Record<string, unknown>) => body.schema === undefined ? undefined : str(body.schema, "schema", 1, 63);
 
   return {
     async route(req: DatasourceRequest): Promise<Response> {
@@ -161,7 +164,9 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           }
           // Relational provider routes — sqlite paths and connId profiles alike.
           case "/schema":
-            return await withRelational(body, r => r.schema(req.signal));
+            // GET requests arrive via searchParams, so includeSystem can be
+            // the string "true" — not just the POST boolean.
+            return await withRelational(body, r => r.schema(req.signal, body.includeSystem === true || body.includeSystem === "true"));
           case "/databases":
             return await withRelational(body, r => {
               if (!r.databases) throw new DbError("not_found", "This source lists no databases");
@@ -172,30 +177,30 @@ export function makeDatasourceRouter(profiles: Profiles, registry: DriverRegistr
           case "/query":
             return await withRelational(body, r => r.query({
               sql: sql(body), params: params(body), limit: num(body.limit), offset: num(body.offset),
-              timeoutMs: num(body.timeoutMs), exportAll: body.exportAll === true,
+              timeoutMs: num(body.timeoutMs), exportAll: body.exportAll === true, schema: schema(body),
             }, req.signal));
           case "/explain":
-            return await withRelational(body, r => r.explain({ sql: sql(body), params: params(body), timeoutMs: num(body.timeoutMs) }, req.signal));
+            return await withRelational(body, r => r.explain({ sql: sql(body), params: params(body), timeoutMs: num(body.timeoutMs), schema: schema(body) }, req.signal));
           // /exec with allowWrite !== true is the read-only batch path: the
           // engine validates the script and enforces read-only execution.
           case "/exec": {
             const allowWrite = body.allowWrite === true;
             const { key } = connKey(body);
             if (allowWrite && !req.writable(key)) return fail("Connection is read-only", 403);
-            return await withRelational(body, r => r.exec(sql(body), allowWrite, req.signal, num(body.timeoutMs)));
+            return await withRelational(body, r => r.exec(sql(body), allowWrite, req.signal, num(body.timeoutMs), schema(body)));
           }
           case "/migration/preview": {
             // A preview still executes the script inside a rolled-back
             // transaction — profiled connections need the writable session.
             const { key } = connKey(body);
             if (body.connId !== undefined && !req.writable(key)) return fail("Connection is read-only", 403);
-            return await withRelational(body, r => r.migrate(sql(body), false, req.signal, num(body.timeoutMs)));
+            return await withRelational(body, r => r.migrate(sql(body), false, req.signal, num(body.timeoutMs), schema(body)));
           }
           case "/migration/apply": {
             const { key } = connKey(body);
             if (!req.writable(key)) return fail("Connection is read-only", 403);
             if (body.allowWrite !== true) throw new DbError("not_read_only", "migration apply requires explicit confirmation");
-            return await withRelational(body, r => r.migrate(sql(body), true, req.signal, num(body.timeoutMs)));
+            return await withRelational(body, r => r.migrate(sql(body), true, req.signal, num(body.timeoutMs), schema(body)));
           }
           case "/rows/preview": {
             if (!Array.isArray(body.changes)) throw new DbError("invalid_change", "Invalid changes");

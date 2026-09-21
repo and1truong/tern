@@ -197,7 +197,7 @@ export interface KeyOpResult {
   error?: string;   // server error text when ok === false
 }
 
-// Thrown by dbServer on bad path / non-read query / SQL error. HTTP layer maps
+// Thrown by datasource drivers on bad path / non-read query / SQL error. HTTP layer maps
 // it to a 4xx with { error }.
 export class DbError extends Error {
   constructor(public code: "not_found" | "not_a_database" | "not_read_only" | "multi_statement" | "sql" | "cancelled" | "timeout" | "invalid_change" | "conflict" | "command_error", message: string) {

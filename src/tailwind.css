@@ -76,3 +76,6 @@ dialog.connection-dialog::backdrop { background:rgb(0 0 0 / 50%); }
 [class*="shadow"] { box-shadow:none; }
 .cm-editor { height:100%; font-size:12px; }
 .cm-scroller { font-family:"SFMono-Regular", Consolas, monospace !important; }
+
+/* Schema controls wrap without clipping the workbench toolbar. */
+.main-toolbar { height:auto; min-height:36px; flex-wrap:wrap; padding-block:4px; }

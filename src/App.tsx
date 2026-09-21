@@ -1,3 +1,5 @@
+import { SchemaPicker } from "./SchemaPicker.tsx";
+import { filterSchemaCatalog, isSystemSchema, querySchemaLabel, readSchemaPreferences, schemaPreferenceKey, type SchemaPreference } from "./schemaContext.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Database, Plus, RefreshCw, Terminal, Network, Activity, FileCode, KeyRound } from "lucide-react";
 import { dbApi, type DbSource } from "./dbApi.ts";
@@ -24,6 +26,10 @@ const urlPathName = (url: string) => { try { return decodeURIComponent(new URL(u
 const urlHost = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 export function App() {
+  const preferences = useRef<Record<string, SchemaPreference>>({});
+  const catalogRequests = useRef(new Map<string, number>());
+  const systemCatalogs = useRef(new Set<string>());
+  const [preferenceVersion, setPreferenceVersion] = useState(0);
   const [connections, setConnections] = useState<DbSource[]>([]);
   const [selected, setSelected] = useState<DbSource | null>(null);
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
@@ -82,8 +88,10 @@ export function App() {
     ];
     setConnections(connectionsRef.current);
   };
-  const connect = async (source: DbSource) => {
+  const connect = async (source: DbSource, includeSystem = false) => {
     const key = sourceId(source);
+    const request = (catalogRequests.current.get(key) ?? 0) + 1;
+    catalogRequests.current.set(key, request);
     setStates(s => ({ ...s, [key]: 'Connecting…' }));
     try {
       // The live profile's readOnly is authoritative — a persisted document's
@@ -110,7 +118,8 @@ export function App() {
         // /open re-inserts into recent_files, so drop it again.
         if (forgotten.current.has(source.path)) { void dbApi.forget(source.path).catch(() => {}); setStates(s => ({ ...s, [key]: 'Disconnected' })); return null; }
       }
-      const schema = await dbApi.schema(source);
+      if (includeSystem || (source.kind === 'postgres' && source.schema && isSystemSchema(source.schema))) systemCatalogs.current.add(key);
+      const schema = await dbApi.schema(source, systemCatalogs.current.has(key));
       if (source.kind === "postgres") {
         const result = await dbApi.databases(source);
         setDatabases(s => ({ ...s, [source.connId]: result.databases }));
@@ -122,10 +131,12 @@ export function App() {
       // stale flag would leave the server writable under a read-only UI.
       const { writable: actual } = await dbApi.access(source, () => writableRef.current[key] ?? profileWritable);
       setWritable(s => ({ ...s, [key]: actual }));
+      if (catalogRequests.current.get(key) !== request) return schema;
       setSchemas(s => ({ ...s, [key]: schema }));
       setStates(s => ({ ...s, [key]: 'Connected' }));
       return schema;
     } catch (e) {
+      if (catalogRequests.current.get(key) !== request) return null;
       setStates(s => ({ ...s, [key]: 'Disconnected' }));
       // A failed reconnect must not keep the Writable badge of a previous
       // session — the flag is only meaningful while connected.
@@ -136,18 +147,23 @@ export function App() {
   };
   useEffect(() => {
     const connectionsReady = refreshConnections().catch(e => setError(String(e)));
-    void dbApi.state.get<unknown>('documents').then(async saved => {
+    void dbApi.state.get<unknown>('schemaPreferences').then(value => {
+      preferences.current = readSchemaPreferences(value);
+      setPreferenceVersion(v => v + 1);
+      return dbApi.state.get<unknown>('documents');
+    }).then(async saved => {
       if (isDocuments(saved)) {
         // One malformed persisted doc must not discard the whole saved tab
         // set — drop it, and repair `active` if it pointed at a dropped tab.
         const restored = saved.tabs.filter(isDocument);
         setTabs(restored);
         setActive(restored.some(t => t.id === saved.active) ? saved.active : restored[0]?.id ?? '');
+        for (const doc of restored) if (doc.source.kind === 'postgres' && doc.source.schema && isSystemSchema(doc.source.schema)) systemCatalogs.current.add(sourceId(doc.source));
         const unique = new Map(restored.map(d => [sourceId(d.source), d.source]));
         setSelected(restored.find(d => d.id === saved.active)?.source ?? null);
         // Profiles must be loaded before connect() reads their readOnly flag.
         await connectionsReady;
-        await Promise.all([...unique.values()].map(connect));
+        await Promise.all([...unique.values()].map(s => connect(s, s.kind === "postgres" && preferences.current[schemaPreferenceKey(s)]?.showSystem)));
       }
       // Only mark ready after a successful fetch — a failed restore must not
       // let the persist effect overwrite saved documents with the empty state.
@@ -155,11 +171,31 @@ export function App() {
     }).catch(e => setError(String(e)));
     void dbApi.state.get<{ sidebar: number }>('layout').then(value => { if (typeof value?.sidebar === 'number') setSidebar(Math.max(180, Math.min(440, value.sidebar))); }).catch(() => {});
   }, []);
+  useEffect(() => { if (ready) void dbApi.state.set('schemaPreferences', preferences.current).catch(e => setError(String(e))); }, [preferenceVersion, ready]);
   useEffect(() => { if (ready) void dbApi.state.set('documents', { tabs, active }).catch(e => setError(String(e))); }, [tabs, active, ready]);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => { if (Object.values(dirty).some(Boolean)) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
+  const selectSource = (next: DbSource) => {
+    if (next.kind === 'postgres') {
+      const pref = preferences.current[schemaPreferenceKey(next)];
+      next = { ...next, schema: pref?.schema };
+      setSelected(next); setActive('');
+      void connect(next, pref?.showSystem);
+    } else { setSelected(next); setActive(''); void connect(next); }
+  };
+  const schemaPreference = source?.kind === 'postgres' ? preferences.current[schemaPreferenceKey(source)] : undefined;
+  const showSystem = schemaPreference?.showSystem ?? false;
+  const selectSchema = (schema: string | undefined, system = showSystem) => {
+    if (source?.kind !== 'postgres') return;
+    preferences.current = { ...preferences.current, [schemaPreferenceKey(source)]: { schema, showSystem: system } };
+    setPreferenceVersion(v => v + 1);
+    // The selector controls the next document. Existing documents keep their source.
+    const next = { ...source, schema };
+    setSelected(next); setActive('');
+    if (system && !systemCatalogs.current.has(id)) void connect(next, true);
+  };
   const open = (kind: Document['kind'], table?: string) => {
     if (!source || (!schemas[id] && !infos[id])) return;
     // Redis connections only support key/console documents — anything else
@@ -167,8 +203,11 @@ export function App() {
     if (source.kind === 'redis' ? kind !== 'key' && kind !== 'console' : kind === 'key' || kind === 'console') return;
     // SQL and console docs carry per-doc state (title, history) so each open
     // is its own document; every other kind focuses the existing tab.
+    // A migration doc is also pinned to its schema — a preview under one
+    // search_path must not be reused as another schema's document.
     if (kind !== 'sql' && kind !== 'console') {
-      const existing = tabs.find(t => t.kind === kind && sourceId(t.source) === id && t.table === table);
+      const existing = tabs.find(t => t.kind === kind && sourceId(t.source) === id && t.table === table
+        && (kind !== 'migration' || (t.source.kind === 'postgres' ? t.source.schema : undefined) === (source.kind === 'postgres' ? source.schema : undefined)));
       if (existing) { setActive(existing.id); return; }
     }
     const titles = { diagram: 'Relationships', insights: 'Database Insights', migration: 'Migration Studio', settings: 'Database Settings', console: 'Console' } as const;
@@ -284,6 +323,9 @@ export function App() {
       const prune = <T,>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([key]) => !stale(key)));
       setDatabases(prune); setSchemas(prune); setInfos(prune); setStates(prune); setWritable(prune);
       writableRef.current = prune(writableRef.current);
+      systemCatalogs.current = new Set([...systemCatalogs.current].filter(key => !stale(key)));
+      for (const key of catalogRequests.current.keys()) if (stale(key)) catalogRequests.current.delete(key);
+      if (s.kind === 'postgres') { preferences.current = Object.fromEntries(Object.entries(preferences.current).filter(([key]) => (JSON.parse(key) as string[])[0] !== s.connId)); setPreferenceVersion(v => v + 1); }
     } catch (e) { setError(String(e)); }
   };
   return <main className="workbench" onPointerDown={e => { if (!(e.target as Element).closest('.menubar')) e.currentTarget.querySelectorAll<HTMLDetailsElement>('.menubar details[open]').forEach(d => { d.open = false; }); }}>
@@ -296,7 +338,10 @@ export function App() {
     </header>
     <div className="toolbar main-toolbar"><button aria-label="Refresh catalog" disabled={!source} onClick={() => source && void connect(source)}><RefreshCw size={14}/></button><button disabled={!source} onClick={() => open(source?.kind === 'redis' ? 'console' : 'sql')}>{source?.kind === 'redis' ? <><Terminal size={14}/>Console</> : <><Plus size={14}/>SQL</>}</button><span className="divider"/>
       <button onClick={() => setPicker('postgres')}><Database size={14}/>New connection</button><button onClick={() => setPicker('redis')}><KeyRound size={14}/>New Redis</button><button onClick={() => setPicker('sqlite')}>Open SQLite</button>
-      {source?.kind === 'postgres' && <select aria-label="Database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database ?? urlPathName(source.url)} onChange={e => { const next = { ...source, database: e.target.value }; setSelected(next); setActive(''); void connect(next); }}>{(databases[source.connId] ?? [urlPathName(source.url)]).map(name => <option key={name}>{name}</option>)}</select>}
+      {source?.kind === 'postgres' && <select aria-label="Database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database ?? urlPathName(source.url)} onChange={e => selectSource({ ...source, database: e.target.value, schema: undefined })}>{(databases[source.connId] ?? [urlPathName(source.url)]).map(name => <option key={name}>{name}</option>)}</select>}
+      {source?.kind === 'postgres' && <SchemaPicker key={id} schemas={schemas[id]?.schemas ?? []} selected={source.schema}
+        showSystem={showSystem} loading={states[id] === 'Connecting…'} onSelect={schema => selectSchema(schema)}
+        onShowSystem={show => selectSchema(source.schema, show)} onRefresh={() => void connect(source, showSystem)} />}
       {/* Cluster mode has a single logical db — the selector only applies */}
       {/* to standalone connections (db count isn't in the capability set, */}
       {/* so the list stays at the conventional 16). */}
@@ -308,7 +353,7 @@ export function App() {
     {help && <div className="toolbar">⌘/Ctrl+O Open SQLite · ⌘/Ctrl+N New SQL · ⌘/Ctrl+W Close document · ⌘/Ctrl+Enter Run statement · Shift+⌘/Ctrl+Enter Run all<button className="ml-auto" onClick={() => setHelp(false)}>Close</button></div>}
     <div className="workbench-center">
       <aside className="explorer" style={{ width: sidebar }}><div className="explorer-title">CONNECTIONS<button aria-label="Add connection" onClick={() => setPicker('postgres')}>+</button></div>
-        <div className="connections-list">{connections.map(s => <div key={sourceId(s)} className="connection-row"><button className={id === sourceId(s) ? 'selected' : ''} title={s.kind === 'sqlite' ? s.path : s.url} onClick={() => { setSelected(s); setActive(''); if (s.kind === 'sqlite') forgotten.current.delete(s.path); void connect(s); }}><Database size={13}/><span className="truncate">{sourceLabel(s)}</span><span className="connection-state">{states[sourceId(s)] === 'Connected' ? '●' : '○'}</span></button><button aria-label={`Remove ${sourceLabel(s)}`} onClick={() => void forget(s)}>×</button></div>)}</div>
+        <div className="connections-list">{connections.map(s => <div key={sourceId(s)} className="connection-row"><button className={id === sourceId(s) ? 'selected' : ''} title={s.kind === 'sqlite' ? s.path : s.url} disabled={!ready} onClick={() => { if (s.kind === 'sqlite') forgotten.current.delete(s.path); selectSource(s); }}><Database size={13}/><span className="truncate">{sourceLabel(s)}</span><span className="connection-state">{states[sourceId(s)] === 'Connected' ? '●' : '○'}</span></button><button aria-label={`Remove ${sourceLabel(s)}`} onClick={() => void forget(s)}>×</button></div>)}</div>
         {source && <><div className="explorer-title database-title">{source.kind === 'sqlite' ? sourceLabel(source) : source.kind === 'redis' ? `db ${source.database}` : (source.database ?? urlPathName(source.url))}<span>{states[id]}</span></div>
           {source.kind === 'redis'
             ? <RedisKeyExplorer source={source} info={infos[id] ?? null} writable={!!writable[id]} reloadTick={explorerTick} activeKey={current?.kind === 'key' ? current.table ?? null : null} onOpenKey={key => open('key', key)} onRenamedKey={(src, from, to) => {
@@ -328,13 +373,13 @@ export function App() {
                 return prev.flatMap(d => d.kind === 'key' && d.table === from && sourceId(d.source) === sid ? (existing ? [] : [{ ...d, table: to, title: `Key ${to}` }]) : [d]);
               });
             }} onChanged={() => void refreshInfo(source)} />
-            : <ObjectTree schema={schemas[id] ?? null} activeTable={current?.table ?? null} onSelect={table => open('table', table)} locked={false}/>}</>}
+            : <ObjectTree key={id} schema={schemas[id] && source.kind === 'postgres' ? filterSchemaCatalog(schemas[id], source.schema, showSystem) : schemas[id] ?? null} activeTable={current?.table ?? null} onSelect={table => open('table', table)} locked={false}/>}</>}
         {!connections.length && <p className="p-3 text-[var(--text-muted)]">Open a SQLite file, add a PostgreSQL connection, or connect to Redis to begin.</p>}
       </aside>
       <div role="separator" aria-label="Resize explorer" aria-orientation="vertical" tabIndex={0} className="resize-handle" onKeyDown={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const width = Math.max(180, Math.min(440, sidebar + (e.key === 'ArrowLeft' ? -10 : 10))); setSidebar(width); void dbApi.state.set('layout', { sidebar: width }).catch(() => {}); } }} onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) setSidebar(Math.max(180, Math.min(440, e.clientX))); }} onPointerUp={e => { e.currentTarget.releasePointerCapture(e.pointerId); void dbApi.state.set('layout', { sidebar }).catch(() => {}); }}/>
       <section className="document-area">
         <div className="document-tabs" role="tablist">{tabs.map(doc => <div key={doc.id} className={`document-tab ${doc.id === active ? 'selected' : ''}`}><button role="tab" aria-selected={doc.id === active} title={`${doc.title} — ${sourceLabel(doc.source)}`} onClick={() => { setActive(doc.id); setSelected(doc.source); }}>{doc.kind === 'sql' ? <Terminal size={13}/> : doc.kind === 'diagram' ? <Network size={13}/> : doc.kind === 'insights' ? <Activity size={13}/> : <FileCode size={13}/>} {doc.title}{dirty[doc.id] && ' ●'}</button><button aria-label={`Close ${doc.title}`} onClick={() => close(doc)}>×</button></div>)}<button aria-label="New document" disabled={!source} onClick={() => open(source?.kind === 'redis' ? 'console' : 'sql')}>+</button></div>
-        {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite · PostgreSQL · Redis / Valkey workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button><button onClick={() => setPicker('redis')}>New Redis connection</button>{source && <><button onClick={() => open(source.kind === 'redis' ? 'console' : 'sql')}>New {source.kind === 'redis' ? 'console' : 'SQL'} document <kbd>⌘N</kbd></button>{source.kind !== 'redis' && <><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}
+        {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite · PostgreSQL · Redis / Valkey workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button><button onClick={() => setPicker('redis')}>New Redis connection</button>{source && <>{source.kind === 'postgres' && <p>Query schema: {querySchemaLabel(source)}</p>}<button onClick={() => open(source.kind === 'redis' ? 'console' : 'sql')}>New {source.kind === 'redis' ? 'console' : 'SQL'} document <kbd>⌘N</kbd></button>{source.kind !== 'redis' && <><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}
         {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} info={infos[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={syncDirty} onLatency={setLatency} onRefresh={doc.source.kind === 'redis' ? () => keyChanged(doc.source) : () => void connect(doc.source)} onRetargetKey={retargetKey} />)}
       </section>
     </div>
@@ -355,9 +400,9 @@ export function App() {
     </dialog>}
     <footer className="statusbar"><span>{source?.kind === 'redis' ? `${infos[id]?.flavor === 'valkey' ? 'Valkey' : 'Redis'} ${infos[id]?.version ?? ''}` : source?.kind === 'postgres' ? `PostgreSQL ${schemas[id]?.pragmas.server_version ?? ''}` : source ? `SQLite ${schemas[id]?.pragmas.sqlite_version ?? ''}` : 'Tern'}</span><span>{source?.kind === 'sqlite' ? source.path : source ? urlHost(source.url) : 'No database open'}</span><span>{source?.kind === "postgres" ? source.database ?? urlPathName(source.url) : source?.kind === "redis" ? `db ${source.database}` : ""}</span><span className="ml-auto">{states[id] ?? 'Ready'}</span><span className={writable[id] ? 'production' : ''}>{writable[id] ? 'Writable' : 'Read Only'}</span><span>{latency.toFixed(1)} ms</span></footer>
     {createView && source && <DatabaseCreateViewModal source={source} onClose={() => setCreateView(false)} onCreated={() => void connect(source)}/>}
-    {picker && <DatabaseOpenModal initial={picker} onClose={() => setPicker(false)} onOpen={s => { setPicker(false); setSelected(s); setActive(''); // connect() reads the just-saved profile's readOnly — refresh first; an explicit open also clears a pending forget.
+    {picker && <DatabaseOpenModal initial={picker} onClose={() => setPicker(false)} onOpen={s => { setPicker(false); // connect() reads the just-saved profile's readOnly — refresh first; an explicit open also clears a pending forget.
       if (s.kind === 'sqlite') forgotten.current.delete(s.path);
-      void refreshConnections().then(() => connect(s)).catch(e => setError(String(e))); }}/ >}
+      void refreshConnections().then(() => selectSource(s)).catch(e => setError(String(e))); }}/ >}
   </main>;
 }
 
@@ -376,6 +421,9 @@ function DocumentView({ doc, visible, schema, info, writable, onDirty, onLatency
     </div>;
   }
   return <div role="tabpanel" className={visible ? 'document-body' : 'hidden'}>
+    {doc.source.kind === 'postgres' && <div className="toolbar">Query schema: {querySchemaLabel(doc.source)}
+      {doc.source.schema && schema && !schema.schemas?.includes(doc.source.schema) && <span role="alert" className="error">Schema unavailable; open a new document with another schema.</span>}
+    </div>}
     {!schema ? <div className="p-4 text-[var(--text-muted)]">Connection unavailable. Reconnect using the explorer.</div> : <>
       {doc.kind === 'table' && (table ? <TableDocument table={table} schema={schema} source={doc.source} writable={writable} onDirty={dirty} onLatency={onLatency}/> : <div className="p-4">This object no longer exists.</div>)}
       {doc.kind === 'sql' && <SqlEditor documentId={doc.id} source={doc.source} schema={schema} writable={writable} onExeced={onRefresh} onDirty={dirty} onLatency={onLatency}/>}
