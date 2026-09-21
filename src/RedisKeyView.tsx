@@ -179,7 +179,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
       {v.kind === 'stream' && <div className="space-y-2 text-xs">
         {v.entries.map(e => <div key={e.id} className="border border-[var(--border)] p-2">
           <p className="mono text-[var(--muted)] mb-1">{e.id}</p>
-          <table className="w-full"><tbody>{Object.entries(e.fields ?? {}).map(([f, val]) => <tr key={f}><td className="pr-2 font-mono text-[var(--muted)] align-top">{f}</td><td className="font-mono break-all">{val}</td></tr>)}</tbody></table>
+          <table className="w-full"><tbody>{(e.fields ?? []).map((f, i) => <tr key={i}><td className="pr-2 font-mono text-[var(--muted)] align-top">{f.field}</td><td className="font-mono break-all">{f.value}</td></tr>)}</tbody></table>
         </div>)}
         <p className="text-[var(--faint)]">Streams are read-only in this view — append with XADD in the console.</p>
       </div>}

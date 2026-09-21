@@ -342,7 +342,7 @@ describe("explorer inspect", () => {
     const modernSession = await makeRedisDriver(modern.factory).connect({ url: URL });
     const modernPage = await modernSession.explorer!.inspect("st", "5-1");
     if (modernPage.value.kind !== "stream") throw new Error("expected stream value");
-    expect(modernPage.value.entries[0]).toEqual({ id: "6-1", fields: { f: "w" } });
+    expect(modernPage.value.entries[0]).toEqual({ id: "6-1", fields: [{ field: "f", value: "w" }] });
 
     const legacy = makeFake(INFO_REDIS5, (command, args) => {
       if (command === "XRANGE") {
@@ -367,7 +367,7 @@ describe("explorer inspect", () => {
     const session = await makeRedisDriver(factory).connect({ url: URL });
     const inspection = await session.explorer!.inspect("s");
     if (inspection.value.kind !== "stream") throw new Error("expected stream value");
-    expect(inspection.value.entries[0]?.fields["__proto__"]).toBe("pwn");
+    expect(inspection.value.entries[0]?.fields.find(f => f.field === "__proto__")?.value).toBe("pwn");
     expect(JSON.stringify(inspection.value.entries[0]?.fields)).toContain("pwn");
   });
 
@@ -381,8 +381,29 @@ describe("explorer inspect", () => {
     const session = await makeRedisDriver(factory).connect({ url: URL });
     const inspection = await session.explorer!.inspect("s");
     if (inspection.value.kind !== "stream") throw new Error("expected stream value");
-    expect(inspection.value.entries[0]?.fields).toEqual({ f: "v", g: "w" });
-    expect(inspection.value.entries[1]?.fields).toEqual({ f: "v2" });
+    expect(inspection.value.entries[0]?.fields).toEqual([{ field: "f", value: "v" }, { field: "g", value: "w" }]);
+    expect(inspection.value.entries[1]?.fields).toEqual([{ field: "f", value: "v2" }]);
+  });
+
+  test("stream entries preserve duplicate field names in order", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "stream";
+      if (command === "TTL") return -1;
+      if (command === "XRANGE") return [["1-1", ["tag", "a", "tag", "b"]]];
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("s");
+    if (inspection.value.kind !== "stream") throw new Error("expected stream value");
+    expect(inspection.value.entries[0]?.fields).toEqual([{ field: "tag", value: "a" }, { field: "tag", value: "b" }]);
+  });
+
+  test("an uncataloged command carrying BLOCK 0 is refused", async () => {
+    const { factory, calls } = makeFake(INFO_REDIS);
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const result = await session.console!.exec("NEWSOMECMD STREAMS s BLOCK 0", { writable: true });
+    expect(result.reply.t).toBe("err");
+    expect(calls.some(c => c.command === "NEWSOMECMD")).toBe(false);
   });
 
   test("missing keys and unknown server types degrade gracefully", async () => {

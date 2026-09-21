@@ -4,7 +4,7 @@ import type { DataSourceInfo } from "../shared/types.ts";
 
 // Redis-native key browser: incremental SCAN with pattern/type filters, plus
 // rename/delete/expire/persist. Never issues KEYS.
-export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey, onRenamedKey, onChanged }: {
+export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey, onRenamedKey, onChanged, reloadTick }: {
   source: RedisSource;
   info: DataSourceInfo | null;
   writable: boolean;
@@ -14,6 +14,9 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
   // source may have changed while the rename was in flight.
   onRenamedKey?(source: RedisSource, from: string, to: string): void;
   onChanged?(): void;
+  // Bumped when a key document mutates the key set — the explorer's own
+  // `applied` counter only sees its own ops.
+  reloadTick?: number;
 }) {
   const [pattern, setPattern] = useState('*');
   const [type, setType] = useState('');
@@ -66,7 +69,7 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
   // connection still establishing — the error would otherwise sit until a
   // manual ↻. Object identity stays off the list so info refreshes (key-op
   // count bumps) don't reset the page.
-  useEffect(() => { void load(true); }, [source, applied, info === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(true); }, [source, applied, info === null, reloadTick]); // eslint-disable-line react-hooks/exhaustive-deps
   // Armed write controls must not outlive the writable session that armed
   // them — dropping to read-only clears any pending confirm.
   useEffect(() => { if (!writable) { setRenaming(null); setDeleting(null); setExpiring(null); } }, [writable]);

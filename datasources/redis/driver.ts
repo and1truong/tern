@@ -201,6 +201,13 @@ function makeConsoleProvider(transport: SessionTransport, commandTimeoutMs: numb
       if (blockSeconds !== null && blockSeconds > MAX_BLOCK_SECONDS) {
         return { reply: { t: "err", s: `ERR ${name} timeout exceeds the console maximum of ${MAX_BLOCK_SECONDS} seconds` }, ms: 0 };
       }
+      // An uncataloged command can't resolve a blocking timeout — refuse the
+      // one indefinite shape still recognizable positionally, a literal
+      // BLOCK 0 pair, rather than parking the transport until sendTimed
+      // evicts the whole session.
+      if (!doc && args.some((a, i) => /^BLOCK$/i.test(a) && Number(args[i + 1]) === 0)) {
+        return { reply: { t: "err", s: `ERR ${name} is uncataloged and carries BLOCK 0; indefinite blocks are refused on the shared transport` }, ms: 0 };
+      }
       // Commands that outlive the timeout abandon a pending reply, which would
       // desync every later response on this shared transport — the thrown
       // DbError("timeout") makes the router evict and close the session.
@@ -454,18 +461,18 @@ function pairEntries(flat: unknown[]): { field: string; value: string }[] {
   return entries;
 }
 
-function parseStreamEntry(raw: unknown): { id: string; fields: Record<string, string> } {
-  if (!Array.isArray(raw) || raw.length < 2) return { id: text(raw), fields: {} };
+// Field names may repeat within one stream entry — keep ordered pairs; a
+// Record would silently drop every occurrence but the last.
+function parseStreamEntry(raw: unknown): { id: string; fields: { field: string; value: string }[] } {
+  if (!Array.isArray(raw) || raw.length < 2) return { id: text(raw), fields: [] };
   // RESP3-aware transports may decode the field pairs as a map/object rather
   // than the RESP2 flat array — accept either shape.
   const pairs = raw[1];
   const flat = pairs instanceof Map ? [...pairs.entries()].flat()
     : pairs !== null && typeof pairs === "object" && !Array.isArray(pairs) ? Object.entries(pairs).flat()
     : pairs;
-  if (!Array.isArray(flat)) return { id: text(raw[0]), fields: {} };
-  const fields: Record<string, string> = Object.create(null);
-  for (let i = 0; i + 1 < flat.length; i += 2) fields[text(flat[i])] = text(flat[i + 1]);
-  return { id: text(raw[0]), fields };
+  if (!Array.isArray(flat)) return { id: text(raw[0]), fields: [] };
+  return { id: text(raw[0]), fields: pairEntries(flat) };
 }
 
 // Stream ids compare numerically per segment ("9-1" sorts before "10-1").

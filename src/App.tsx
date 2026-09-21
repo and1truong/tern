@@ -223,6 +223,11 @@ export function App() {
       setInfos(s => ({ ...s, [sourceId(target)]: info }));
     } catch { /* badge refresh is best-effort */ }
   };
+  // Key-view mutations (rename/delete/expire) change the set the explorer
+  // lists — bump its reload tick alongside the info refresh, or stale keys
+  // linger until a manual refresh.
+  const [explorerTick, setExplorerTick] = useState(0);
+  const keyChanged = (target: DbSource) => { void refreshInfo(target); setExplorerTick(t => t + 1); };
   const changeAccess = async (target: DbSource, enabled: boolean) => {
     setAccessBusy(true); setError('');
     const key = sourceId(target);
@@ -306,7 +311,7 @@ export function App() {
         <div className="connections-list">{connections.map(s => <div key={sourceId(s)} className="connection-row"><button className={id === sourceId(s) ? 'selected' : ''} title={s.kind === 'sqlite' ? s.path : s.url} onClick={() => { setSelected(s); setActive(''); if (s.kind === 'sqlite') forgotten.current.delete(s.path); void connect(s); }}><Database size={13}/><span className="truncate">{sourceLabel(s)}</span><span className="connection-state">{states[sourceId(s)] === 'Connected' ? '●' : '○'}</span></button><button aria-label={`Remove ${sourceLabel(s)}`} onClick={() => void forget(s)}>×</button></div>)}</div>
         {source && <><div className="explorer-title database-title">{source.kind === 'sqlite' ? sourceLabel(source) : source.kind === 'redis' ? `db ${source.database}` : (source.database ?? urlPathName(source.url))}<span>{states[id]}</span></div>
           {source.kind === 'redis'
-            ? <RedisKeyExplorer source={source} info={infos[id] ?? null} writable={!!writable[id]} activeKey={current?.kind === 'key' ? current.table ?? null : null} onOpenKey={key => open('key', key)} onRenamedKey={(src, from, to) => {
+            ? <RedisKeyExplorer source={source} info={infos[id] ?? null} writable={!!writable[id]} reloadTick={explorerTick} activeKey={current?.kind === 'key' ? current.table ?? null : null} onOpenKey={key => open('key', key)} onRenamedKey={(src, from, to) => {
               // The explorer's own source identifies the docs — the selected
               // source may have switched while the rename was in flight.
               const sid = sourceId(src);
@@ -330,7 +335,7 @@ export function App() {
       <section className="document-area">
         <div className="document-tabs" role="tablist">{tabs.map(doc => <div key={doc.id} className={`document-tab ${doc.id === active ? 'selected' : ''}`}><button role="tab" aria-selected={doc.id === active} title={`${doc.title} — ${sourceLabel(doc.source)}`} onClick={() => { setActive(doc.id); setSelected(doc.source); }}>{doc.kind === 'sql' ? <Terminal size={13}/> : doc.kind === 'diagram' ? <Network size={13}/> : doc.kind === 'insights' ? <Activity size={13}/> : <FileCode size={13}/>} {doc.title}{dirty[doc.id] && ' ●'}</button><button aria-label={`Close ${doc.title}`} onClick={() => close(doc)}>×</button></div>)}<button aria-label="New document" disabled={!source} onClick={() => open(source?.kind === 'redis' ? 'console' : 'sql')}>+</button></div>
         {!current && <div className="welcome"><Database size={32}/><h1>Tern</h1><p>SQLite · PostgreSQL · Redis / Valkey workbench</p><div className="welcome-actions"><button onClick={() => setPicker('sqlite')}>Open SQLite database <kbd>⌘O</kbd></button><button onClick={() => setPicker('postgres')}>New PostgreSQL connection</button><button onClick={() => setPicker('redis')}>New Redis connection</button>{source && <><button onClick={() => open(source.kind === 'redis' ? 'console' : 'sql')}>New {source.kind === 'redis' ? 'console' : 'SQL'} document <kbd>⌘N</kbd></button>{source.kind !== 'redis' && <><button onClick={() => open('diagram')}>Relationships</button><button onClick={() => open('insights')}>Database Insights</button><button onClick={() => open('migration')}>Migration Studio</button></>}</>}</div><p className="text-[var(--text-muted)]">Select a connection, then open objects from the explorer.</p></div>}
-        {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} info={infos[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={syncDirty} onLatency={setLatency} onRefresh={doc.source.kind === 'redis' ? () => void refreshInfo(doc.source) : () => void connect(doc.source)} onRetargetKey={retargetKey} />)}
+        {tabs.map(doc => <DocumentView key={doc.id} doc={doc} visible={doc.id === active} schema={schemas[sourceId(doc.source)]} info={infos[sourceId(doc.source)]} writable={!!writable[sourceId(doc.source)]} onDirty={syncDirty} onLatency={setLatency} onRefresh={doc.source.kind === 'redis' ? () => keyChanged(doc.source) : () => void connect(doc.source)} onRetargetKey={retargetKey} />)}
       </section>
     </div>
     {accessTarget && <dialog ref={accessDialog} aria-labelledby="access-title" className="connection-dialog" onCancel={event => { if (accessBusy) event.preventDefault(); else setAccessTarget(null); }}>

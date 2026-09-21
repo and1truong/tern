@@ -75,7 +75,7 @@ async function verify(name: string, url: string, expectFlavor: "redis" | "valkey
     const z = await explorer.inspect(keys.z);
     check(`${name}: zset score`, z.value.kind === "zset" && z.value.entries[0]?.score === 1.5, z.value);
     const st = await explorer.inspect(keys.st);
-    check(`${name}: stream entry`, st.value.kind === "stream" && st.value.entries[0]?.fields.sensor === "temp", st.value);
+    check(`${name}: stream entry`, st.value.kind === "stream" && st.value.entries[0]?.fields.some(f => f.field === "sensor" && f.value === "temp"), st.value);
 
     // Key ops: expire, persist, rename, edit, delete.
     check(`${name}: expire`, (await explorer.keyOp({ op: "expire", key: keys.s, seconds: 999 })).n === 1);
