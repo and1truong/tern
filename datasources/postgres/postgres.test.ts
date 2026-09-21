@@ -78,11 +78,11 @@ test("pairs composite foreign-key columns by catalog ordinal", () => {
 });
 
 // Integration tests require a live Postgres. Set TEST_PG_URL to enable, e.g.
-//   TEST_PG_URL=postgres://postgres:pw@localhost:5432/postgres bun test pgServer
+//   TEST_PG_URL=postgres://postgres:pw@localhost:5432/postgres bun test datasources/postgres
 const PG = process.env.TEST_PG_URL;
 const pgDescribe = PG ? describe : describe.skip;
 
-pgDescribe("pgServer (live)", () => {
+pgDescribe("postgres driver (live)", () => {
   const url = PG!;
   const T = "pgserver_test_t";
 
