@@ -50,6 +50,9 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
     try {
       const next = await dbApi.datasource.inspect(targetRef.current.source, targetRef.current.keyName, cursor);
       if (gen !== loadGen.current) return;
+      // No error boundary above us — a malformed inspection must become an
+      // error message, not a crash reading v.kind/v.entries at render.
+      if (!isKeyInspection(next)) throw new Error("Malformed inspect reply");
       setInspection(prev => cursor && prev && prev.key === next.key
         ? mergePage(prev, next)
         : next);
@@ -105,7 +108,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
           // RENAME overwrites an existing destination — confirm first. Busy
           // spans the check so other toolbar ops can't interleave with it.
           setBusy(n => n + 1);
-          const check = dbApi.datasource.inspect(source, to).then(target => target.value.kind === 'none' || window.confirm(`"${to}" already exists — overwrite it?`)).catch(() => true);
+          const check = dbApi.datasource.inspect(source, to).then(target => target?.value?.kind === 'none' || window.confirm(`"${to}" already exists — overwrite it?`)).catch(() => window.confirm(`Couldn't check whether "${to}" exists — rename anyway?`));
           void check.then(proceed => {
             if (!proceed) return;
             void mutate({ op: 'rename', from: keyName, to }).then(result => {
@@ -115,7 +118,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
           }).finally(() => setBusy(n => n - 1));
         }}>Rename</button><button className="text-xs" onClick={() => setRenamed(null)}>×</button></span>}
         {!renamed && writable && <button disabled={isBusy} onClick={() => setRenamed({ to: keyName })}>Rename</button>}
-        {writable && <span className="flex gap-1 items-center"><input aria-label="Expire seconds" type="number" min="1" value={expiresIn} onChange={e => setExpiresIn(e.target.value)} className="w-20 bg-[var(--bg)] border border-[var(--border)] p-1 text-xs" /><button disabled={isBusy || !/^\d+$/.test(expiresIn.trim()) || Number(expiresIn) < 1} title={/^\d+$/.test(expiresIn.trim()) && Number(expiresIn) >= 1 ? undefined : 'Seconds must be a positive number'} onClick={() => void mutate({ op: 'expire', key: keyName, seconds: Number(expiresIn) })}>Expire</button><button disabled={isBusy} onClick={() => void mutate({ op: 'persist', key: keyName })}>Persist</button></span>}
+        {writable && <span className="flex gap-1 items-center"><input aria-label="Expire seconds" type="number" min="1" value={expiresIn} onChange={e => setExpiresIn(e.target.value)} className="w-20 bg-[var(--bg)] border border-[var(--border)] p-1 text-xs" /><button disabled={isBusy || !validSeconds(expiresIn)} title={validSeconds(expiresIn) ? undefined : 'Seconds must be a positive integer'} onClick={() => void mutate({ op: 'expire', key: keyName, seconds: Number(expiresIn) })}>Expire</button><button disabled={isBusy} onClick={() => void mutate({ op: 'persist', key: keyName })}>Persist</button></span>}
         {confirmDelete ? <span className="flex gap-1"><button className="primary text-xs" disabled={isBusy} onClick={() => void mutate({ op: 'delete', keys: [keyName] })}>Confirm delete</button><button className="text-xs" onClick={() => setConfirmDelete(false)}>Cancel</button></span>
           : writable && <button className="text-[var(--danger)]" onClick={() => setConfirmDelete(true)}>Delete</button>}
       </span>
@@ -176,7 +179,7 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
       {v.kind === 'stream' && <div className="space-y-2 text-xs">
         {v.entries.map(e => <div key={e.id} className="border border-[var(--border)] p-2">
           <p className="mono text-[var(--muted)] mb-1">{e.id}</p>
-          <table className="w-full"><tbody>{Object.entries(e.fields).map(([f, val]) => <tr key={f}><td className="pr-2 font-mono text-[var(--muted)] align-top">{f}</td><td className="font-mono break-all">{val}</td></tr>)}</tbody></table>
+          <table className="w-full"><tbody>{Object.entries(e.fields ?? {}).map(([f, val]) => <tr key={f}><td className="pr-2 font-mono text-[var(--muted)] align-top">{f}</td><td className="font-mono break-all">{val}</td></tr>)}</tbody></table>
         </div>)}
         <p className="text-[var(--faint)]">Streams are read-only in this view — append with XADD in the console.</p>
       </div>}
@@ -186,6 +189,20 @@ export function RedisKeyView({ source, keyName, writable, onChanged, onRenamed }
     </div>
   </div>;
 }
+
+// The wire shape is only trusted as far as the kind tag — a collection kind
+// must actually carry its array, and a string kind its text.
+function isKeyInspection(x: unknown): x is KeyInspection {
+  const v = (x as KeyInspection | null)?.value as { kind?: unknown } | undefined;
+  if (!v || typeof v !== "object" || typeof v.kind !== "string") return false;
+  const field = { hash: "entries", list: "items", set: "members", zset: "entries", stream: "entries" }[v.kind];
+  return field ? Array.isArray((v as Record<string, unknown>)[field])
+    : v.kind === "none" || v.kind === "unknown" || (v.kind === "string" && typeof (v as { value?: unknown }).value === "string");
+}
+
+// The server rejects non-safe integers — mirror the bound so the error
+// surfaces before the round trip.
+const validSeconds = (s: string) => /^\d+$/.test(s.trim()) && Number.isSafeInteger(Number(s)) && Number(s) >= 1;
 
 function nextCursor(v: KeyInspection['value']): string | undefined {
   switch (v.kind) {

@@ -222,7 +222,7 @@ export function scanSqlTokens(sql: string, dialect: "sqlite" | "postgres" = "pos
       tokens.push({ value: sql.slice(start, i).toUpperCase(), start, end: i });
       continue;
     }
-    if ([";", "(", ")", ","].includes(ch)) tokens.push({ value: ch, start: i, end: i + 1 });
+    if ([";", "(", ")", ",", "=", "."].includes(ch)) tokens.push({ value: ch, start: i, end: i + 1 });
     i++;
   }
   return tokens;
@@ -259,12 +259,19 @@ export function assertReadOnlySql(sql: string, dialect: "sqlite" | "postgres" = 
     throw new DbError("not_read_only", `statement must start with SELECT/WITH/EXPLAIN/VALUES or SHOW/read PRAGMA (got "${verb}")`);
   }
   if (verb === "PRAGMA") {
-    const name = tokens[1] ?? "";
-    if (!READ_PRAGMAS.has(name) || normalized.includes("=")) throw new DbError("not_read_only", `PRAGMA ${name || "statement"} is not an approved read`);
+    // A schema qualifier is legal for attached DBs — the pragma name sits
+    // after the '.' token (PRAGMA main.table_info). The '=' test runs on
+    // tokens, not raw text: '=' inside a literal or comment is data
+    // (PRAGMA table_info('a=b')), only a structural '=' is the SET form.
+    const name = tokens[2] === "." ? tokens[3] ?? "" : tokens[1] ?? "";
+    if (!READ_PRAGMAS.has(name) || tokens.includes("=")) throw new DbError("not_read_only", `PRAGMA ${name || "statement"} is not an approved read`);
   }
   const structure = scanSqlTokens(normalized, dialect).map(token => token.value);
-  if (verb === "PRAGMA" && structure[2] === "(" && !PRAGMA_FUNCTION_READS.has(tokens[1] ?? "")) {
-    throw new DbError("not_read_only", `PRAGMA ${tokens[1] ?? "statement"}(…) is the write form`);
+  if (verb === "PRAGMA") {
+    const paren = structure.indexOf("(");
+    if (paren !== -1 && !PRAGMA_FUNCTION_READS.has(structure[paren - 1] ?? "")) {
+      throw new DbError("not_read_only", `PRAGMA ${structure[paren - 1] ?? "statement"}(…) is the write form`);
+    }
   }
   let depth = 0;
   let explainOperation = verb === "EXPLAIN";
@@ -313,6 +320,7 @@ export const PG_SIDE_EFFECT_FUNCTIONS = new Set([
   "PG_READ_FILE", "PG_READ_BINARY_FILE", "PG_STAT_FILE",
   "PG_LS_DIR", "PG_LS_LOGDIR", "PG_LS_WALDIR", "PG_LS_TMPDIR",
   "PG_LS_ARCHIVE_STATUSDIR", "PG_LS_REPLSLOTDIR",
+  "PG_LS_LOGICALMAPDIR", "PG_LS_LOGICALSNAPDIR",
   "PG_FILE_SETTINGS", "PG_SHOW_ALL_FILE_SETTINGS",
   "PG_HBA_FILE_RULES", "PG_IDENT_FILE_MAPPINGS",
   "PG_TEST_FSYNC", "PG_TEST_TIMING_TARGETS",
@@ -333,7 +341,15 @@ export const PG_SIDE_EFFECT_FUNCTIONS = new Set([
   "PG_REPLICATION_ORIGIN_CREATE", "PG_REPLICATION_ORIGIN_DROP",
   "PG_REPLICATION_ORIGIN_ADVANCE", "PG_REPLICATION_ORIGIN_SESSION_SETUP",
   "PG_REPLICATION_ORIGIN_XACT_SETUP",
+  "PG_REPLICATION_ORIGIN_SESSION_RESET", "PG_REPLICATION_ORIGIN_XACT_RESET",
   "PG_WAL_REPLAY_PAUSE", "PG_WAL_REPLAY_RESUME",
+  "PG_LOG_CHECKPOINTS", "PG_SIGNAL_AUTOVACUUM_WORKER",
+  // postgres_fdw connection state and forced stats flushes are
+  // session-scoped effects outside the read transaction.
+  "POSTGRES_FDW_DISCONNECT", "POSTGRES_FDW_DISCONNECT_ALL", "POSTGRES_FDW_GET_CONNECTIONS",
+  "PG_STAT_FORCE_NEXT_FLUSH",
+  // Sequence mutators persist past the transaction's ROLLBACK.
+  "NEXTVAL", "SETVAL",
   "BRIN_SUMMARIZE_NEW_VALUES", "BRIN_SUMMARIZE_RANGE", "BRIN_DESUMMARIZE_RANGE",
   "GIN_CLEAN_PENDING_LIST",
   "PG_STAT_RESET", "PG_STAT_RESET_SHARED", "PG_STAT_RESET_SLRU",

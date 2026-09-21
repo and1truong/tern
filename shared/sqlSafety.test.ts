@@ -51,6 +51,13 @@ describe("SQL read-only safety", () => {
     // Function-arg reads stay allowed.
     expect(boundReadSql("PRAGMA foreign_key_list(t)", 10)).toBe("PRAGMA foreign_key_list(t)");
     expect(boundReadSql("PRAGMA journal_mode", 10)).toBe("PRAGMA journal_mode");
+    // Schema-qualified reads are legal for attached DBs, and '=' inside a
+    // literal or comment is data — only a structural '=' is the SET form.
+    expect(boundReadSql("PRAGMA main.table_info(users)", 10)).toBe("PRAGMA main.table_info(users)");
+    expect(boundReadSql("PRAGMA table_info('a=b')", 10)).toBe("PRAGMA table_info('a=b')");
+    expect(boundReadSql("PRAGMA index_list(\"a=b\")", 10)).toBe("PRAGMA index_list(\"a=b\")");
+    expect(() => assertReadOnlySql("PRAGMA main.user_version = 7")).toThrow(DbError);
+    expect(() => assertReadOnlySql("PRAGMA main.journal_mode(DELETE)")).toThrow(DbError);
   });
 
   test("a read-only postgres query cannot call functions with server-side effects", () => {
@@ -121,6 +128,16 @@ describe("SQL read-only safety", () => {
       "SELECT pg_wal_replay_pause()",
       "SELECT brin_summarize_new_values('i')",
       "SELECT pg_stat_reset_subscription('s')",
+      // Same-class additions: PG18 file readers, session/catalog state, fdw
+      // connections, forced stats flush, sequence mutators.
+      "SELECT pg_ls_logicalmapdir()",
+      "SELECT pg_log_checkpoints()",
+      "SELECT pg_signal_autovacuum_worker()",
+      "SELECT pg_replication_origin_session_reset()",
+      "SELECT postgres_fdw_disconnect_all()",
+      "SELECT pg_stat_force_next_flush()",
+      "SELECT nextval('s')",
+      "SELECT setval('s', 1)",
     ]) {
       expect(() => assertReadOnlySql(sql, "postgres"), sql).toThrow(DbError);
     }

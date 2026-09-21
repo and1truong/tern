@@ -6,7 +6,7 @@ import { DbError } from "../shared/types.ts";
 import type { RowChange } from "../shared/types.ts";
 import type { DataSourceDriver, DriverRegistry, DriverSession, RelationalProvider } from "./contracts.ts";
 import { compileRowChanges } from "../shared/rowMutations.ts";
-import { dbErrorResponse } from "../server/routeHandlers.ts";
+import { dbErrorResponse } from "../shared/httpError.ts";
 
 // Structural subset of the server's Connections store.
 export interface Profiles {

@@ -371,6 +371,20 @@ describe("explorer inspect", () => {
     expect(JSON.stringify(inspection.value.entries[0]?.fields)).toContain("pwn");
   });
 
+  test("stream entries accept RESP3 map-shaped field pairs", async () => {
+    const { factory } = makeFake(INFO_REDIS, (command) => {
+      if (command === "TYPE") return "stream";
+      if (command === "TTL") return -1;
+      if (command === "XRANGE") return [["1-1", { f: "v", g: "w" }], ["2-1", new Map([["f", "v2"]])]];
+      return null;
+    });
+    const session = await makeRedisDriver(factory).connect({ url: URL });
+    const inspection = await session.explorer!.inspect("s");
+    if (inspection.value.kind !== "stream") throw new Error("expected stream value");
+    expect(inspection.value.entries[0]?.fields).toEqual({ f: "v", g: "w" });
+    expect(inspection.value.entries[1]?.fields).toEqual({ f: "v2" });
+  });
+
   test("missing keys and unknown server types degrade gracefully", async () => {
     const { factory } = makeFake(INFO_REDIS, (command, args) => {
       if (command === "TYPE") return args[0] === "gone" ? "none" : "ReJSON-RL";

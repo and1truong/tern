@@ -132,12 +132,11 @@ export function makeApp(db: Database, options: { secrets?: SecretStore; appPath?
         const profile = await connections.get(body.connId);
         if (!profile) return fail("Unknown connection", 404);
         if (body.database !== undefined && (typeof body.database !== "string" || body.database.length > 64)) return fail("Invalid database");
-        // Redis db indexes are digit strings — "0"/"00" select the same db
-        // but would fork the session key and writable grant. Canonicalize
-        // here, where the driver kind is known: postgres database names are
-        // verbatim ("007" and "7" are legitimately different databases).
-        if (profile.driver === "redis" && typeof body.database === "string" && /^\d+$/.test(body.database)) {
-          body.database = String(BigInt(body.database));
+        // Session keys and writable grants must key on the canonical
+        // database selector — the rule belongs to the driver (Redis's "0"
+        // and "00" are the same db; postgres names pass verbatim).
+        if (typeof body.database === "string") {
+          body.database = registry.get(profile.driver)?.canonicalizeDatabase?.(body.database) ?? body.database;
         }
         key = `${body.connId}/${body.database ?? ""}`;
         connections.touch(body.connId);

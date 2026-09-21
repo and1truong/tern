@@ -90,6 +90,7 @@ function numOrThrow(v: string): string {
 
 function compileRuleExec(r: FilterRule, cols: DbColumn[], params: unknown[], dialect: DbDialect): string {
   const col = cols[r.col];
+  if (!col) throw new Error(`filter references column index ${r.col}, out of range`);
   const textOperation = ["contains", "not_contains", "regex", "glob"].includes(r.op);
   const name = dialect === "postgres" && ((textOperation && !isTextType(col.type)) || (col.comparable === false && ["equals", "not_equals"].includes(r.op))) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
   const numeric = isNumericType(col.type);
@@ -110,6 +111,7 @@ function compileRuleExec(r: FilterRule, cols: DbColumn[], params: unknown[], dia
     case "gte": params.push(numOrThrow(r.value)); return `${name} >= ?`;
     case "is_null": return `${name} IS NULL`;
     case "not_null": return `${name} IS NOT NULL`;
+    default: throw new Error(`unknown filter op "${(r as { op: string }).op}"`);
   }
 }
 
@@ -135,6 +137,7 @@ function sqlLit(value: string, numeric: boolean): string {
 }
 function compileRulePreview(r: FilterRule, cols: DbColumn[], dialect: DbDialect): string {
   const col = cols[r.col];
+  if (!col) throw new Error(`filter references column index ${r.col}, out of range`);
   const textOperation = ["contains", "not_contains", "regex", "glob"].includes(r.op);
   const name = dialect === "postgres" && ((textOperation && !isTextType(col.type)) || (col.comparable === false && ["equals", "not_equals"].includes(r.op))) ? `CAST(${ident(col.name)} AS text)` : ident(col.name);
   const numeric = isNumericType(col.type);
@@ -155,6 +158,7 @@ function compileRulePreview(r: FilterRule, cols: DbColumn[], dialect: DbDialect)
     case "gte": return `${name} >= ${sqlLit(r.value, numeric)}`;
     case "is_null": return `${name} IS NULL`;
     case "not_null": return `${name} IS NOT NULL`;
+    default: throw new Error(`unknown filter op "${(r as { op: string }).op}"`);
   }
 }
 function compileGroupPreview(g: FilterGroup, cols: DbColumn[], dialect: DbDialect): string {

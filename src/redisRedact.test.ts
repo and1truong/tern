@@ -51,6 +51,8 @@ describe("redactSensitive", () => {
     expect(redactSensitive("SENTINEL MONITOR m h 6379 2")).toBe("SENTINEL MONITOR m h 6379 2");
     expect(redactSensitive("CONFIG SET tls-key-file-pass s3cret")).toBe("CONFIG SET tls-key-file-pass (redacted)");
     expect(redactSensitive("CONFIG SET tls-client-key-file-pass s3cret")).toBe("CONFIG SET tls-client-key-file-pass (redacted)");
+    expect(redactSensitive("CONFIG SET sentinel-auth-pass s3cret")).toBe("CONFIG SET sentinel-auth-pass (redacted)");
+    expect(redactSensitive("CONFIG SET sentinel-auth-user deploy")).toBe("CONFIG SET sentinel-auth-user (redacted)");
   });
   test("leaves ordinary commands untouched", () => {
     expect(redactSensitive("GET mykey")).toBe("GET mykey");

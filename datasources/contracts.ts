@@ -72,6 +72,10 @@ export interface DataSourceDriver {
   displayName: string;
   kind: string;             // "key-value", "relational", ...
   validateUrl(url: string): void;    // throws Error with a user-facing message
+  // Canonicalize a logical-database selector before it feeds session keys —
+  // e.g. Redis's numeric db indexes ("00" and "0" are the same db). Drivers
+  // without logical dbs leave it unset and the value passes verbatim.
+  canonicalizeDatabase?(database: string): string;
   test(config: ConnectionConfig): Promise<DataSourceInfo>;
   connect(config: ConnectionConfig): Promise<DriverSession>;
 }

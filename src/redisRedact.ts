@@ -8,7 +8,7 @@
 import { tokenizeCommand } from "../datasources/redis/resp.ts";
 
 // CONFIG SET parameters whose values are credentials.
-const CONFIG_SECRET_PARAMS = new Set(["MASTERAUTH", "REQUIREPASS", "TLS-KEY-FILE-PASS", "TLS-CLIENT-KEY-FILE-PASS"]);
+const CONFIG_SECRET_PARAMS = new Set(["MASTERAUTH", "REQUIREPASS", "TLS-KEY-FILE-PASS", "TLS-CLIENT-KEY-FILE-PASS", "SENTINEL-AUTH-PASS", "SENTINEL-AUTH-USER"]);
 
 export function redactSensitive(input: string): string {
   return input.split("\n").map(redactLine).join("\n");

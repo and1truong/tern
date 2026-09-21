@@ -57,10 +57,10 @@ export function rowsToCsv(columns: string[], rows: Record<string, unknown>[]): s
 
 export function coerceCellValue(raw: string, type: string): unknown {
   const value = raw.trim();
-  if (raw === "\\N") return null;
-  if (raw.startsWith("\\\\")) return raw.slice(1);
+  if (value === "\\N") return null;
+  if (value.startsWith("\\\\")) return value.slice(1);
   if (/\b(DECIMAL|NUMERIC)\b/i.test(type) && value !== "") return value;
-  if (/\b(INT|INTEGER|BIGINT|SMALLINT|INT8|SERIAL|BIGSERIAL)\b/i.test(type) && /^[-+]?\d+$/.test(value)) {
+  if (/\b(INT[248]?|INT64|INTEGER|BIGINT|SMALLINT|SERIAL|BIGSERIAL|SMALLSERIAL)\b/i.test(type) && /^[-+]?\d+$/.test(value)) {
     const number = Number(value);
     return Number.isSafeInteger(number) ? number : value;
   }

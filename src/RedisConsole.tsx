@@ -18,8 +18,10 @@ const freshConsole = (): SavedConsole => ({ input: "", history: [], favorites: [
 
 function isSavedConsole(value: unknown): value is SavedConsole {
   if (!value || typeof value !== 'object') return false;
+  // history/favorites are newer fields — a console saved before they existed
+  // must still restore rather than losing its input.
   const saved = value as Partial<SavedConsole>;
-  return typeof saved.input === 'string' && Array.isArray(saved.history) && Array.isArray(saved.favorites);
+  return typeof saved.input === 'string';
 }
 
 // Redis-cli style rendering of a tagged RESP value. The wire shape is only
@@ -27,9 +29,13 @@ function isSavedConsole(value: unknown): value is SavedConsole {
 // rather than crashing the app (there is no error boundary above us).
 export function renderRESP(value: RespValue, indent = ""): string[] {
   if (!value || typeof value !== "object") return [`${indent}(unprintable reply)`];
+  // A pathological or hostile reply could nest deep enough to overflow the
+  // stack mid-render — cap the depth instead of crashing the app. The cap is
+  // at entry so map keys (which recurse into renderRESP too) count.
+  if (indent.length > 64) return [`${indent}…`];
   switch (value.t) {
     case "nil": return [`${indent}(nil)`];
-    case "str": return [`${indent}"${value.s.replace(/\n/g, "\\n")}"`];
+    case "str": return typeof value.s === "string" ? [`${indent}"${value.s.replace(/\n/g, "\\n")}"`] : [`${indent}(unprintable reply)`];
     case "int": return [`${indent}(integer) ${value.n}`];
     case "dbl": return [`${indent}(double) ${value.n}`];
     case "bool": return [`${indent}${value.b ? "(true)" : "(false)"}`];
@@ -38,9 +44,6 @@ export function renderRESP(value: RespValue, indent = ""): string[] {
     case "verb": return [`${indent}${value.s}`];
     case "arr":
     case "set": {
-      // A pathological or hostile reply could nest deep enough to overflow
-      // the stack mid-render — cap the depth instead of crashing the app.
-      if (indent.length > 64) return [`${indent}…`];
       const items = Array.isArray(value.items) ? value.items : [];
       if (!items.length) return [`${indent}(empty ${value.t === "set" ? "set" : "array"})`];
       return items.flatMap((item, i) => [
@@ -51,7 +54,7 @@ export function renderRESP(value: RespValue, indent = ""): string[] {
     case "map": {
       const entries = Array.isArray(value.entries) ? value.entries : [];
       return entries.flatMap((pair, i) => [
-        `${indent}${i + 1}) ${renderRESP(pair?.[0], "").join("").trim()}`,
+        `${indent}${i + 1}) ${renderRESP(pair?.[0], indent + " ").join("").trim()}`,
         ...renderRESP(pair?.[1], indent + "  "),
       ]);
     }
@@ -96,8 +99,8 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
       // aren't the expected types rather than letting them throw in stash().
       if (isSavedConsole(value)) setConsole(boundConsoleHistory({
         input: value.input,
-        history: value.history.filter(h => h && typeof h.command === 'string' && typeof h.at === 'number'),
-        favorites: value.favorites.filter(f => typeof f === 'string'),
+        history: (Array.isArray(value.history) ? value.history : []).filter(h => h && typeof h.command === 'string' && typeof h.at === 'number'),
+        favorites: (Array.isArray(value.favorites) ? value.favorites : []).filter(f => typeof f === 'string'),
       }));
     }).catch(e => setError(String(e))).finally(() => setReady(true));
   }, [storageKey]);
@@ -199,15 +202,16 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
   const insertSuggestion = (insert: string) => {
     // Replace the partial token ending at the cursor; when the partial sits
     // inside an open quote, drop the dangling fragment too. Text after the
-    // cursor is preserved.
-    const lines = consoleState.input.split("\n");
+    // cursor is preserved. latest.current, not the render snapshot — edits
+    // landing in the same commit window must not revert each other.
+    const lines = latest.current.input.split("\n");
     const i = Math.min(cursorLine - 1, lines.length - 1);
     const suffix = lines[i]!.slice(cursorCol);
     let base = lines[i]!.slice(0, cursorCol).replace(/\S*$/, "");
     if (unclosedQuote(base, '"')) base = base.replace(/"[^"]*$/, "");
     else if (unclosedQuote(base, "'")) base = base.replace(/'[^']*$/, "");
     lines[i] = base + insert + suffix;
-    persist({ ...consoleState, input: lines.join("\n") });
+    persist({ ...latest.current, input: lines.join("\n") });
     setSuggestions([]);
     // Focus stays on the editor so the user can keep typing after the click.
     editorView.current?.focus();
@@ -270,13 +274,13 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
         <div className="flex-1 min-h-0 overflow-auto p-2 font-mono text-xs space-y-2">
           {outputs.map((entry, i) => <div key={i} className="border-b border-[var(--border)] pb-1">
             <p className="flex gap-2 items-center">
-              <span className="text-[var(--accent)]">{entry.command}</span>
+              <span className="text-[var(--accent)]">{redactSensitive(entry.command)}</span>
               {entry.result && <span className="text-[var(--faint)]">{entry.result.ms.toFixed(1)} ms</span>}
-              <button aria-label={`Star ${entry.command}`} className="ml-auto" title="Favorite"
-                onClick={() => !consoleState.favorites.includes(entry.command) && persist({ ...consoleState, favorites: [entry.command, ...consoleState.favorites].slice(0, 50) })}>☆</button>
+              <button aria-label={`Star ${redactSensitive(entry.command)}`} className="ml-auto" title="Favorite"
+                onClick={() => !latest.current.favorites.includes(entry.command) && persist({ ...latest.current, favorites: [entry.command, ...latest.current.favorites].slice(0, 50) })}>☆</button>
             </p>
             {entry.result && renderRESP(entry.result.reply).map((line, j) => <pre key={j} className={`whitespace-pre-wrap ${line.startsWith("(error)") ? "text-[var(--danger)]" : ""}`}>{line}</pre>)}
-            {entry.error && <pre className="text-[var(--danger)] whitespace-pre-wrap">{entry.error}</pre>}
+            {entry.error && <pre className="text-[var(--danger)] whitespace-pre-wrap">{redactSensitive(entry.error)}</pre>}
           </div>)}
           {!outputs.length && <p className="text-[var(--faint)]">Run a command to see its RESP reply here.</p>}
         </div>
@@ -290,12 +294,12 @@ export function RedisConsole({ docId, source, info, writable, onDirty, onLatency
         {explanation.dangers.length > 0 && <ul className="text-[var(--danger)] space-y-1">{explanation.dangers.map((d, i) => <li key={i}>{d}</li>)}</ul>}
         {explanation.risks.length > 0 && <ul className="space-y-1 text-[var(--warning)]">{explanation.risks.map((r, i) => <li key={i}>{r}</li>)}</ul>}
         {explanation.cluster.length > 0 && <ul className="space-y-1 text-[var(--text-muted)]">{explanation.cluster.map((c, i) => <li key={i}>{c}</li>)}</ul>}
-        {consoleState.favorites.length > 0 && <div><b>Favorites</b><ul className="mt-1 space-y-1">{consoleState.favorites.map(f => <li key={f}><button className="text-left w-full truncate hover:underline" onClick={() => { setSuggestions([]); persist({ ...consoleState, input: f }); }}>★ {f}</button></li>)}</ul></div>}
+        {consoleState.favorites.length > 0 && <div><b>Favorites</b><ul className="mt-1 space-y-1">{consoleState.favorites.map(f => <li key={f}><button className="text-left w-full truncate hover:underline" onClick={() => { setSuggestions([]); persist({ ...latest.current, input: f }); }}>★ {redactSensitive(f)}</button></li>)}</ul></div>}
       </aside>}
       {historyOpen && <aside className="w-80 border-l border-[var(--border)] p-3 overflow-auto text-xs">
-        <div className="flex"><b>Command history</b><button className="ml-auto text-[10px] text-[var(--muted)]" onClick={() => persist({ ...consoleState, history: [] })}>Clear</button></div>
-        {consoleState.history.map((entry, i) => <button key={i} className="block w-full text-left py-1 border-b border-[var(--border)] truncate hover:bg-[var(--hover)]" onClick={() => { setSuggestions([]); persist({ ...consoleState, input: entry.command }); }}>
-          {entry.command}
+        <div className="flex"><b>Command history</b><button className="ml-auto text-[10px] text-[var(--muted)]" onClick={() => persist({ ...latest.current, history: [] })}>Clear</button></div>
+        {consoleState.history.map((entry, i) => <button key={i} className="block w-full text-left py-1 border-b border-[var(--border)] truncate hover:bg-[var(--hover)]" onClick={() => { setSuggestions([]); persist({ ...latest.current, input: entry.command }); }}>
+          {redactSensitive(entry.command)}
         </button>)}
         {!consoleState.history.length && <p className="text-[var(--faint)]">No commands yet.</p>}
       </aside>}

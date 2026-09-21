@@ -69,6 +69,9 @@ export const migrations: Migration[] = [
       ensureColumn("created_at", "created_at INTEGER");
       ensureColumn("last_used_at", "last_used_at INTEGER");
       ensureColumn("driver", "driver TEXT NOT NULL DEFAULT 'postgres'");
+      // The 'postgres' default mislabels redis-scheme rows in a driver-less
+      // pre-v4 file — re-derive the driver from the URL scheme.
+      db.exec("UPDATE datasource_connections SET driver = 'redis' WHERE driver = 'postgres' AND (url LIKE 'redis://%' OR url LIKE 'rediss://%')");
       if (legacy && current) {
         // A mixed file (both tables present) cannot rename — merge the legacy
         // rows instead, then drop the old table so this path never repeats.

@@ -77,6 +77,20 @@ test("redactSqlSecrets catches secrets still being typed", () => {
   expect(redactSqlSecrets("psql postgres://admin:hunter2@db.internal/mydb"))
     .toBe("psql postgres://(redacted)@db.internal/mydb");
   expect(redactSqlSecrets("\\connect postgres://u:p@h/d")).not.toContain("u:p");
+  // Conninfo key=value secrets can hide inside a literal — the literal-skip
+  // must not preserve them verbatim.
+  expect(redactSqlSecrets("SELECT dblink_connect('c', 'host=h password=s3cret port=5432')"))
+    .toBe("SELECT dblink_connect('c', 'host=h password=(redacted) port=5432')");
+  // A quoted conninfo value is doubled inside the literal — the escape is
+  // consumed without breaking the literal's own quoting.
+  expect(redactSqlSecrets("SELECT dblink_connect('c', 'host=h password=''s3cret'' port=5432')"))
+    .toBe("SELECT dblink_connect('c', 'host=h password=(redacted) port=5432')");
+  // The buffer persists while typing — an unterminated doubled-quote value
+  // still leaks its secret unless the scrub consumes it.
+  expect(redactSqlSecrets("SELECT dblink_connect('c', 'host=h password=''hunter2"))
+    .toBe("SELECT dblink_connect('c', 'host=h password=(redacted)");
+  expect(redactSqlSecrets("SELECT dblink_connect('c', $$host=h password='s3cret'$$)"))
+    .toBe("SELECT dblink_connect('c', $$host=h password '(redacted)'$$)");
   // The keyword inside a quoted literal or identifier is data — redacting it
   // would consume the closing quote and mangle the persisted buffer.
   expect(redactSqlSecrets("SELECT 'password' FROM t")).toBe("SELECT 'password' FROM t");

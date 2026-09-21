@@ -15,7 +15,7 @@ import { RedisKeyView } from "./RedisKeyView.tsx";
 import { RedisConsole } from "./RedisConsole.tsx";
 import { DatabaseMigrationModal } from "./DatabaseMigrationModal.tsx";
 import { tableKey, tableLabel } from "../shared/sqlIdentifiers.ts";
-import { sourceId, sourceLabel, isDocuments, type Document } from "./documents.ts";
+import { sourceId, sourceLabel, isDocuments, isDocument, type Document } from "./documents.ts";
 import { anyDialogOpen } from "./gridDialogs.tsx";
 
 // Stored URLs can be malformed (hand-edited state); never let a URL parse
@@ -95,9 +95,11 @@ export function App() {
         const { info } = await dbApi.datasource.session(source);
         // Re-assert the access flag on every connect — a server restart drops
         // the server-side session flags while the UI still shows them.
-        const desired = writableRef.current[key] ?? profileWritable;
-        await dbApi.access(source, desired);
-        setWritable(s => ({ ...s, [key]: s[key] ?? desired }));
+        // The thunk re-reads intent at dispatch, and the server's echo is
+        // authoritative for the badge — a racing toggle that later fails and
+        // rolls back must not leave the UI claiming writable.
+        const { writable: actual } = await dbApi.access(source, () => writableRef.current[key] ?? profileWritable);
+        setWritable(s => ({ ...s, [key]: actual }));
         setInfos(s => ({ ...s, [key]: info }));
         setStates(s => ({ ...s, [key]: 'Connected' }));
         return info;
@@ -118,21 +120,31 @@ export function App() {
       // thunk re-reads intent at dispatch: if this request sat queued behind
       // an explicit toggle that then failed and rolled back, sending the
       // stale flag would leave the server writable under a read-only UI.
-      const desired = writableRef.current[key] ?? profileWritable;
-      await dbApi.access(source, () => writableRef.current[key] ?? profileWritable);
-      setWritable(s => ({ ...s, [key]: s[key] ?? desired }));
+      const { writable: actual } = await dbApi.access(source, () => writableRef.current[key] ?? profileWritable);
+      setWritable(s => ({ ...s, [key]: actual }));
       setSchemas(s => ({ ...s, [key]: schema }));
       setStates(s => ({ ...s, [key]: 'Connected' }));
       return schema;
-    } catch (e) { setStates(s => ({ ...s, [key]: 'Disconnected' })); setError(`${sourceLabel(source)}: ${String(e)}`); return null; }
+    } catch (e) {
+      setStates(s => ({ ...s, [key]: 'Disconnected' }));
+      // A failed reconnect must not keep the Writable badge of a previous
+      // session — the flag is only meaningful while connected.
+      setWritable(s => ({ ...s, [key]: false }));
+      setError(`${sourceLabel(source)}: ${String(e)}`);
+      return null;
+    }
   };
   useEffect(() => {
     const connectionsReady = refreshConnections().catch(e => setError(String(e)));
     void dbApi.state.get<unknown>('documents').then(async saved => {
       if (isDocuments(saved)) {
-        setTabs(saved.tabs); setActive(saved.active);
-        const unique = new Map(saved.tabs.map(d => [sourceId(d.source), d.source]));
-        setSelected(saved.tabs.find(d => d.id === saved.active)?.source ?? null);
+        // One malformed persisted doc must not discard the whole saved tab
+        // set — drop it, and repair `active` if it pointed at a dropped tab.
+        const restored = saved.tabs.filter(isDocument);
+        setTabs(restored);
+        setActive(restored.some(t => t.id === saved.active) ? saved.active : restored[0]?.id ?? '');
+        const unique = new Map(restored.map(d => [sourceId(d.source), d.source]));
+        setSelected(restored.find(d => d.id === saved.active)?.source ?? null);
         // Profiles must be loaded before connect() reads their readOnly flag.
         await connectionsReady;
         await Promise.all([...unique.values()].map(connect));
@@ -280,7 +292,10 @@ export function App() {
     <div className="toolbar main-toolbar"><button aria-label="Refresh catalog" disabled={!source} onClick={() => source && void connect(source)}><RefreshCw size={14}/></button><button disabled={!source} onClick={() => open(source?.kind === 'redis' ? 'console' : 'sql')}>{source?.kind === 'redis' ? <><Terminal size={14}/>Console</> : <><Plus size={14}/>SQL</>}</button><span className="divider"/>
       <button onClick={() => setPicker('postgres')}><Database size={14}/>New connection</button><button onClick={() => setPicker('redis')}><KeyRound size={14}/>New Redis</button><button onClick={() => setPicker('sqlite')}>Open SQLite</button>
       {source?.kind === 'postgres' && <select aria-label="Database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database ?? urlPathName(source.url)} onChange={e => { const next = { ...source, database: e.target.value }; setSelected(next); setActive(''); void connect(next); }}>{(databases[source.connId] ?? [urlPathName(source.url)]).map(name => <option key={name}>{name}</option>)}</select>}
-      {source?.kind === 'redis' && <select aria-label="Logical database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database} onChange={e => { const next = { ...source, database: e.target.value }; setSelected(next); setActive(''); void connect(next); }}>{Array.from({ length: 16 }, (_, i) => String(i)).map(name => <option key={name} value={name}>db {name}</option>)}</select>}
+      {/* Cluster mode has a single logical db — the selector only applies */}
+      {/* to standalone connections (db count isn't in the capability set, */}
+      {/* so the list stays at the conventional 16). */}
+      {source?.kind === 'redis' && !infos[id]?.capabilities?.cluster && <select aria-label="Logical database" className="bg-[var(--bg)] border border-[var(--border)] p-1" value={source.database} onChange={e => { const next = { ...source, database: e.target.value }; setSelected(next); setActive(''); void connect(next); }}>{Array.from({ length: 16 }, (_, i) => String(i)).map(name => <option key={name} value={name}>db {name}</option>)}</select>}
       <span className="ml-auto truncate">{source ? sourceLabel(source) : 'No connection'}</span>{source && source.kind !== 'sqlite' && <span className={source.environment === 'production' ? 'production' : 'environment'}>{source.environment}</span>}
       <button disabled={!source} className={writable[id] ? 'production' : 'text-[var(--text-muted)]'} onClick={() => void toggleAccess()}>{writable[id] ? '● Writable' : 'Read Only'}</button>
     </div>
@@ -350,7 +365,7 @@ function DocumentView({ doc, visible, schema, info, writable, onDirty, onLatency
   const table = schema?.tables.find(t => tableKey(t) === doc.table);
   if (doc.source.kind === 'redis') {
     return <div role="tabpanel" className={visible ? 'document-body' : 'hidden'}>
-      {doc.kind === 'key' && (doc.table ? <RedisKeyView source={doc.source} keyName={doc.table} writable={writable} onChanged={onRefresh} onRenamed={newKey => onRetargetKey(doc.id, newKey)}/> : <div className="p-4">No key selected.</div>)}
+      {doc.kind === 'key' && (doc.table !== undefined ? <RedisKeyView source={doc.source} keyName={doc.table} writable={writable} onChanged={onRefresh} onRenamed={newKey => onRetargetKey(doc.id, newKey)}/> : <div className="p-4">No key selected.</div>)}
       {doc.kind === 'console' && <RedisConsole docId={doc.id} source={doc.source} info={info ?? null} writable={writable} onDirty={dirty} onLatency={onLatency}/>}
       {doc.kind !== 'key' && doc.kind !== 'console' && <div className="p-4 text-[var(--text-muted)]">This document type is not available for Redis connections.</div>}
     </div>;

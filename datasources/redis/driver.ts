@@ -45,6 +45,10 @@ export function makeRedisDriver(transportFactory: TransportFactory = defaultFact
     displayName: "Redis / Valkey",
     kind: "key-value",
     validateUrl: validateRedisUrl,
+    // Db indexes are integers — "00" and "0" address the same db and must not
+    // fork session keys or writable grants. Non-numeric values pass verbatim;
+    // sessionUrl rejects them.
+    canonicalizeDatabase: (database) => /^\d+$/.test(database) ? String(BigInt(database)) : database,
     async test(config: ConnectionConfig) {
       const transport = transportFactory(sessionUrl(config.url, config.database));
       try {
@@ -451,9 +455,15 @@ function pairEntries(flat: unknown[]): { field: string; value: string }[] {
 }
 
 function parseStreamEntry(raw: unknown): { id: string; fields: Record<string, string> } {
-  if (!Array.isArray(raw) || raw.length < 2 || !Array.isArray(raw[1])) return { id: text(raw), fields: {} };
+  if (!Array.isArray(raw) || raw.length < 2) return { id: text(raw), fields: {} };
+  // RESP3-aware transports may decode the field pairs as a map/object rather
+  // than the RESP2 flat array — accept either shape.
+  const pairs = raw[1];
+  const flat = pairs instanceof Map ? [...pairs.entries()].flat()
+    : pairs !== null && typeof pairs === "object" && !Array.isArray(pairs) ? Object.entries(pairs).flat()
+    : pairs;
+  if (!Array.isArray(flat)) return { id: text(raw[0]), fields: {} };
   const fields: Record<string, string> = Object.create(null);
-  const flat = raw[1] as unknown[];
   for (let i = 0; i + 1 < flat.length; i += 2) fields[text(flat[i])] = text(flat[i + 1]);
   return { id: text(raw[0]), fields };
 }

@@ -15,6 +15,9 @@ export function InsightsPane({ source }: { source: DbSource }) {
     setBusy(true); setError(null);
     try {
       const next = await dbApi.insights(source);
+      // No error boundary above us — a malformed reply must become an error
+      // message, not a crash on Object.entries(metrics)/activity.map.
+      if (!next || typeof next !== "object" || !next.metrics || typeof next.metrics !== "object" || !Array.isArray(next.activity) || (next.tables !== undefined && !Array.isArray(next.tables))) throw new Error("Malformed insights reply");
       if (request === requestRef.current) setInsights(next);
     } catch (loadError) {
       if (request === requestRef.current) setError(String(loadError));

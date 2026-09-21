@@ -49,16 +49,24 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
       // A stale page from before a filter reset must not merge into the new
       // result set.
       if (gen !== loadGen.current) return;
+      // No error boundary above us — a malformed page must become an error
+      // message, not a crash in the setPage updater.
+      if (!result || !Array.isArray(result.keys) || typeof result.cursor !== "string") throw new Error("Malformed scan reply");
+      const scanned = result.keys.filter((k): k is { key: string; type: string } => !!k && typeof k.key === "string" && typeof k.type === "string");
       // SCAN may revisit keys (and pages may overlap) — dedupe by key name.
       setPage(prev => {
-        const keys = reset ? result.keys : [...prev.keys, ...result.keys];
+        const keys = reset ? scanned : [...prev.keys, ...scanned];
         return { cursor: result.cursor, keys: [...new Map(keys.map(k => [k.key, k])).values()] };
       });
     } catch (e) { if (gen === loadGen.current) setError(String(e)); }
     finally { setBusy(n => n - 1); }
   }, [source, page.cursor]);
 
-  useEffect(() => { void load(true); }, [source, applied]); // eslint-disable-line react-hooks/exhaustive-deps
+  // `info === null` in the deps retries a mount-time scan that raced the
+  // connection still establishing — the error would otherwise sit until a
+  // manual ↻. Object identity stays off the list so info refreshes (key-op
+  // count bumps) don't reset the page.
+  useEffect(() => { void load(true); }, [source, applied, info === null]); // eslint-disable-line react-hooks/exhaustive-deps
   // Armed write controls must not outlive the writable session that armed
   // them — dropping to read-only clears any pending confirm.
   useEffect(() => { if (!writable) { setRenaming(null); setDeleting(null); setExpiring(null); } }, [writable]);
@@ -89,8 +97,11 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
       let proceed = true;
       try {
         const target = await dbApi.datasource.inspect(source, to);
-        if (target.value.kind !== 'none') proceed = window.confirm(`"${to}" already exists — overwrite it?`);
-      } catch { /* existence check is best-effort; the op still runs */ }
+        if (target?.value?.kind !== 'none') proceed = window.confirm(`"${to}" already exists — overwrite it?`);
+      } catch {
+        // An unverifiable destination must not fail open — RENAME overwrites.
+        proceed = window.confirm(`Couldn't check whether "${to}" exists — rename anyway?`);
+      }
       if (!proceed) return;
       const result = await op({ op: 'rename', from, to });
       // Any open key doc for `from` retargets — including inactive tabs, so
@@ -100,6 +111,9 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
   };
 
   const typeBadge = (t: string) => ({ string: 'str', hash: 'hash', list: 'list', set: 'set', zset: 'zset', stream: 'stream' }[t] ?? t);
+  // The server rejects non-safe integers — mirror the bound so the error
+  // surfaces before the round trip.
+  const validSeconds = (s: string) => /^\d+$/.test(s) && Number.isSafeInteger(Number(s)) && Number(s) >= 1;
 
   return <div className="flex flex-col overflow-hidden h-full">
     <div className="px-3 py-2 space-y-2">
@@ -128,8 +142,8 @@ export function RedisKeyExplorer({ source, info, writable, activeKey, onOpenKey,
             <div className="flex gap-1"><button className="primary text-xs" disabled={isBusy} onClick={() => void op({ op: 'delete', keys: [key] })}>Delete</button><button className="text-xs" onClick={() => setDeleting(null)}>Cancel</button></div>
           </div> : expiring?.key === key ? <div className="px-3 py-1 text-xs space-y-1">
             <input aria-label="Seconds until expiry" autoFocus type="number" min="1" value={expiring.seconds} onChange={e => setExpiring({ ...expiring, seconds: e.target.value })}
-              onKeyDown={e => { if (e.key === 'Enter' && !busy && /^\d+$/.test(expiring.seconds) && Number(expiring.seconds) >= 1) void op({ op: 'expire', key, seconds: Number(expiring.seconds) }); if (e.key === 'Escape') setExpiring(null); }} className="w-full bg-[var(--bg)] border border-[var(--border)] p-1" />
-            <div className="flex gap-1"><button className="primary text-xs" disabled={isBusy || !/^\d+$/.test(expiring.seconds) || Number(expiring.seconds) < 1} title={!/^\d+$/.test(expiring.seconds) || Number(expiring.seconds) < 1 ? 'Seconds must be a positive number' : undefined} onClick={() => void op({ op: 'expire', key, seconds: Number(expiring.seconds) })}>Expire</button><button className="text-xs" onClick={() => setExpiring(null)}>Cancel</button></div>
+              onKeyDown={e => { if (e.key === 'Enter' && !busy && validSeconds(expiring.seconds)) void op({ op: 'expire', key, seconds: Number(expiring.seconds) }); if (e.key === 'Escape') setExpiring(null); }} className="w-full bg-[var(--bg)] border border-[var(--border)] p-1" />
+            <div className="flex gap-1"><button className="primary text-xs" disabled={isBusy || !validSeconds(expiring.seconds)} title={validSeconds(expiring.seconds) ? undefined : 'Seconds must be a positive integer'} onClick={() => void op({ op: 'expire', key, seconds: Number(expiring.seconds) })}>Expire</button><button className="text-xs" onClick={() => setExpiring(null)}>Cancel</button></div>
           </div> : <div className={"w-full flex items-center gap-2 px-3 py-1 text-xs hover:bg-[var(--hover)] " + (key === activeKey ? "bg-[var(--accent)]/15" : "")}>
             <button className="flex-1 flex items-center gap-2 text-left min-w-0" title={key} onClick={() => onOpenKey(key)}>
               <span className="mono text-[9px] text-[var(--faint)] uppercase">{typeBadge(keyType)}</span>

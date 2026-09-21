@@ -1,6 +1,6 @@
 import type { DbTable } from "./types.ts";
 import { tableSql } from "./sqlIdentifiers.ts";
-import { decodeDbValue, isDbBinaryValue, isDbSpecialNumber, unwrapDbValueForDisplay } from "./binaryValues.ts";
+import { decodeDbValue, displayDbValue, isDbBinaryValue, isDbSpecialNumber, unwrapDbValueForDisplay } from "./binaryValues.ts";
 
 export type ExportFormat = "csv" | "json" | "sql" | "markdown";
 
@@ -34,8 +34,11 @@ function sqlValue(value: unknown, postgres: boolean, type = ""): string {
 }
 
 export function serializeRows(format: ExportFormat, columns: string[], rows: Record<string, unknown>[], table?: DbTable): string {
+  // Binary values unwrap to the internal wire envelope — render the same
+  // <binary N bytes> marker the grid shows instead of leaking it into
+  // user-facing CSV/markdown/JSON output.
   const displayRows = rows.map((row) => Object.fromEntries(
-    columns.map((column) => [column, unwrapDbValueForDisplay(row[column])]),
+    columns.map((column) => [column, isDbBinaryValue(row[column]) ? displayDbValue(row[column]) : unwrapDbValueForDisplay(row[column])]),
   ));
   if (format === "json") return JSON.stringify(displayRows, null, 2) + "\n";
   if (format === "markdown") {

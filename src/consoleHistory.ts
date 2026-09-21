@@ -52,19 +52,25 @@ export function redactSqlSecrets(sql: string): string {
   // password too — like the redis console, any scheme:// URI's userinfo is
   // stripped rather than enumerating schemes.
   const redacted = sql.replace(/([a-z][a-z0-9+.-]*:\/\/)\S*@/gi, "$1(redacted)@");
+  // Conninfo key=value secrets can nest inside a literal (dblink_connect('c',
+  // 'host=h password=s3cret')) — matches that START inside a literal are
+  // preserved verbatim below, so scrub the key= form up front. The value
+  // stops at whitespace/quote and leaves the literal's quoting intact; a
+  // quoted conninfo value (password=''x'' inside a literal) is consumed too.
+  const scrubbed = redacted.replace(/\b(password)\s*=\s*(?:''[^\s'";]*(?:''[^\s'";]*)*''|''[^\s'";]*(?:''[^\s'";]*)*'?$|[^\s'";]+)/gi, "$1=(redacted)");
   // '…', "…" and `…` regions are data or identifiers — a keyword inside one
   // (SELECT 'password' FROM t) is not a secret, and the value alternation
   // would consume the closing quote and mangle the persisted buffer. The
   // keyword's own literal value is still consumed — only matches that START
   // inside a quoted region are skipped.
   const literals: [number, number][] = [];
-  for (let i = 0; i < redacted.length; i++) {
-    const ch = redacted[i];
+  for (let i = 0; i < scrubbed.length; i++) {
+    const ch = scrubbed[i];
     if (ch === "'" || ch === '"' || ch === "`") {
       const start = i++;
-      while (i < redacted.length) {
-        if (redacted[i] === ch) {
-          if (redacted[i + 1] === ch) { i += 2; continue; }
+      while (i < scrubbed.length) {
+        if (scrubbed[i] === ch) {
+          if (scrubbed[i + 1] === ch) { i += 2; continue; }
           i++; break;
         }
         i++;
@@ -72,7 +78,7 @@ export function redactSqlSecrets(sql: string): string {
       literals.push([start, i]);
     }
   }
-  return redacted.replace(
+  return scrubbed.replace(
     /\b(password|identified\s+(?:with\s+\S+\s+)?by(?:\s+values)?)\b(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*(?:=(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)*((?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*'|"[^"]*"|\$([^\s$]*)\$[\s\S]*?\$\3\$|(?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*$|"[^"]*$|\$[^\s$]*\$[\s\S]*$|\([^;]*\)|\w+\s*\([^;]*\)|[^\s;'"()]+)|((?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*'|"[^"]*"|\$([^\s$]*)\$[\s\S]*?\$\5\$|(?:e|b|x|n|u&)?'(?:[^'\\]|\\.|'')*$|"[^"]*$|\$[^\s$]*\$[\s\S]*$|\([^;]*\)|\w+\s*\([^;]*\)))/gi,
     (...args) => {
       const offset = args[args.length - 2] as number;

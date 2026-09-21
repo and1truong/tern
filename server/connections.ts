@@ -81,6 +81,10 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
   const row = (id: string) =>
     db.query<ConnectionRow, [string]>("SELECT * FROM datasource_connections WHERE id = ?").get(id) ?? null;
 
+  // A save interleaves keychain writes with the SQL upsert — serialize them
+  // so two concurrent saves cannot commit one's URL with the other's secret.
+  let saveQueue: Promise<unknown> = Promise.resolve();
+
   const api: Connections = {
     list: async () =>
       db.query<ConnectionRow, []>("SELECT * FROM datasource_connections ORDER BY last_used_at DESC NULLS LAST, label")
@@ -124,7 +128,23 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       }
       return migratedUrl;
     },
-    save: async (driver, label, url, options = {}) => {
+    // A save interleaves keychain writes with the SQL upsert — serialize
+    // them so two concurrent saves cannot commit one's URL with the
+    // other's secret.
+    save: (driver, label, url, options = {}) => {
+      const next = saveQueue.catch(() => {}).then(() => doSave(driver, label, url, options));
+      saveQueue = next;
+      return next;
+    },
+    touch: (id) => { db.query("UPDATE datasource_connections SET last_used_at = unixepoch() WHERE id = ?").run(id); },
+    delete: async (id) => {
+      const found = row(id);
+      if (found?.secret_name) await secrets.delete(found.secret_name);
+      return db.query("DELETE FROM datasource_connections WHERE id = ?").run(id).changes > 0;
+    },
+  };
+
+  async function doSave(driver: string, label: string, url: string, options: { id?: string; environment?: ConnectionProfile["environment"]; readOnly?: boolean } = {}): Promise<ConnectionProfile> {
       // Own-property lookup: `validators[driver]` would resolve Object
       // prototype members ("constructor", …) as validators and skip checks.
       const validate = Object.hasOwn(validators, driver) ? validators[driver] : undefined;
@@ -165,13 +185,6 @@ export function makeConnections(db: Database, secrets: SecretStore = systemSecre
       const saved = await api.get(id);
       if (!saved) throw new Error("save failed");
       return saved;
-    },
-    touch: (id) => { db.query("UPDATE datasource_connections SET last_used_at = unixepoch() WHERE id = ?").run(id); },
-    delete: async (id) => {
-      const found = row(id);
-      if (found?.secret_name) await secrets.delete(found.secret_name);
-      return db.query("DELETE FROM datasource_connections WHERE id = ?").run(id).changes > 0;
-    },
-  };
+  }
   return api;
 }

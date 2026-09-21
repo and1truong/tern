@@ -88,8 +88,8 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
   const updateSql = (value: string) => {
     const version = ++saveVersion.current;
     const next = boundConsoleHistory({
-      ...consoleState,
-      tabs: consoleState.tabs.map((tab) => tab.id === active.id ? { ...tab, sql: value } : tab),
+      ...latest.current,
+      tabs: latest.current.tabs.map((tab) => tab.id === active.id ? { ...tab, sql: value } : tab),
     });
     setConsole(next);
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -171,7 +171,10 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
 
   const explain = async () => {
     const selection = editor.current?.state.selection.main ?? { from: 0, to: 0 };
-    const statement = sqlToRun(active.sql, selection, false, dialect)[0];
+    let statement: string | undefined;
+    // sqlToRun can throw on ambiguous scripts (run() guards the same call).
+    try { statement = sqlToRun(active.sql, selection, false, dialect)[0]; }
+    catch (e) { setError(String(e)); return; }
     if (!statement) return;
     if (isWriteSql(statement, dialect)) {
       setOutputs([{ sql: statement, kind: "explain", error: "EXPLAIN is available only for read queries." }]);
@@ -227,7 +230,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
           <aside className="w-64 max-w-[40%] border-l border-[var(--border)] flex flex-col bg-[var(--bg)]">
             <div className="flex items-center px-3 py-2 border-b border-[var(--border)] text-xs font-bold text-[var(--text)]">
               Query history
-              <button onClick={() => persist({ ...consoleState, history: [] })} className="ml-auto text-[10px] text-[var(--muted)]">Clear</button>
+              <button onClick={() => persist({ ...latest.current, history: [] })} className="ml-auto text-[10px] text-[var(--muted)]">Clear</button>
             </div>
             <div className="overflow-auto">
               {consoleState.history.map((entry) => (

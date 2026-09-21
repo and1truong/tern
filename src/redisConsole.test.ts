@@ -10,6 +10,17 @@ test("renderRESP renders malformed replies instead of throwing", () => {
   expect(renderRESP({ t: "arr", items: "no" } as unknown as RespValue)).toEqual(["(empty array)"]);
   expect(() => renderRESP({ t: "map", entries: null } as unknown as RespValue)).not.toThrow();
   expect(() => renderRESP({ t: "arr", items: [{ t: "arr", items: [undefined] }] } as unknown as RespValue)).not.toThrow();
+  // A non-string payload under the "str" tag must degrade, not throw on .replace.
+  expect(renderRESP({ t: "str", s: 42 } as unknown as RespValue)).toEqual(["(unprintable reply)"]);
+});
+
+test("renderRESP caps recursion through nested maps", () => {
+  // Map keys and values both recurse — the depth cap must sit at renderRESP's
+  // entry or a deeply nested map reply overflows the stack.
+  let deep: RespValue = { t: "nil" };
+  for (let i = 0; i < 200; i++) deep = { t: "map", entries: [[{ t: "str", s: "k" }, deep]] };
+  expect(() => renderRESP(deep)).not.toThrow();
+  expect(renderRESP(deep).join("\n")).toContain("…");
 });
 
 test("renderRESP renders well-formed values", () => {

@@ -283,7 +283,8 @@ test("migration v4 merges when the target table predates the driver column", () 
   db.query("INSERT INTO pg_connections (id, label, url) VALUES ('legacy', 'Legacy', 'postgres://h/old')").run();
   for (const m of migrations.filter(m => m.v === 4)) m.up(db);
   const rows = db.query<{ id: string; driver: string }, []>("SELECT id, driver FROM datasource_connections ORDER BY id").all();
-  expect(rows).toEqual([{ id: "legacy", driver: "postgres" }, { id: "new", driver: "postgres" }]);
+  // The 'postgres' column default is corrected by a URL-scheme backfill.
+  expect(rows).toEqual([{ id: "legacy", driver: "postgres" }, { id: "new", driver: "redis" }]);
   expect(db.query("SELECT name FROM sqlite_master WHERE name = 'pg_connections'").get()).toBeNull();
   db.close();
 });
