@@ -42,7 +42,7 @@ async function exercise(width: number) {
   const React = (await import("react")).default;
   const { createRoot } = await import("react-dom/client");
   const { flushSync } = await import("react-dom");
-  const { DataGrid } = await import("../src/DatabaseViews.tsx");
+  const { DataGrid } = await import("../src/DataGrid.tsx");
 
   const events: string[] = [];
   const container = document.createElement("div");

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import type { DbSchema } from '../shared.ts';
+import type { DbSchema } from '../shared/types.ts';
 import { filterSchemaCatalog, schemaPreferenceKey, readSchemaPreferences, sqlCompletionSchema } from './schemaContext.ts';
-import { isDocuments } from './documents.ts';
+import { isDocument, isDocuments } from './documents.ts';
 
 const catalog: DbSchema = {
   schemas: ['public', 'billing', 'empty', 'pg_catalog'],
@@ -32,7 +32,11 @@ test('preferences identify the effective database and validate persisted state',
   expect(schemaPreferenceKey(source)).not.toBe(schemaPreferenceKey({ ...source, database: 'another' }));
   expect(readSchemaPreferences({ a: { schema: 'billing', showSystem: false }, b: { schema: 1 }, c: null })).toEqual({ a: { schema: 'billing', showSystem: false } });
   expect(isDocuments({ active: 'q', tabs: [{ id: 'q', kind: 'sql', title: 'Query', source: { ...source, schema: 'billing' } }] })).toBe(true);
-  expect(isDocuments({ active: 'q', tabs: [{ id: 'q', kind: 'sql', title: 'Query', source: { ...source, schema: 1 } }] })).toBe(false);
+  // isDocuments validates the container; a doc with a malformed schema is
+  // dropped by the per-document filter at restore, not the whole tab set.
+  const corrupt = { active: 'q', tabs: [{ id: 'q', kind: 'sql', title: 'Query', source: { ...source, schema: 1 } }] };
+  expect(isDocuments(corrupt)).toBe(true);
+  expect(corrupt.tabs.filter(isDocument)).toEqual([]);
 });
 test('completion retains namespaces and unusual identifiers without collisions', () => {
   const completion = sqlCompletionSchema({ ...catalog, tables: [...catalog.tables, { ...catalog.tables[0], schema: '__proto__', name: 'constructor' }] }, true);

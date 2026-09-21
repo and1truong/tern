@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { schemaRelations, schemaToMermaid } from "./schemaDiagram.ts";
-import type { DbSchema } from "../shared.ts";
+import type { DbSchema } from "../shared/types.ts";
 
 const schema: DbSchema = {
   tables: [

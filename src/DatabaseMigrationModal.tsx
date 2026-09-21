@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { MigrationResult } from "../shared.ts";
+import type { MigrationResult } from "../shared/types.ts";
 import type { DbSource } from "./dbApi.ts";
 import { dbApi } from "./dbApi.ts";
 import Notice from "./Notice.tsx";

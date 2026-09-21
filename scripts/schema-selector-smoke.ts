@@ -18,8 +18,8 @@ const connection = { id: 'pg', label: 'Test PostgreSQL', url: 'postgres://localh
   const body = JSON.parse(String(init?.body ?? '{}'));
   if (url.pathname === '/api/connections') return Response.json({ connections: [connection] });
   if (url.pathname === '/api/recent') return Response.json({ databases: [] });
-  if (url.pathname === '/api/databases') return Response.json({ databases: ['db', 'other'] });
-  if (url.pathname === '/api/schema') {
+  if (url.pathname === '/api/datasource/databases') return Response.json({ databases: ['db', 'other'] });
+  if (url.pathname === '/api/datasource/schema') {
     if (failCatalog) return Response.json({ error: 'catalog offline' }, { status: 400 });
     return Response.json({ schemas: names, tables: names.filter(name => name !== 'empty' && (name !== 'pg_catalog' || url.searchParams.has('includeSystem'))).map(schema => ({ schema, name: 'items', columns: [], type: 'table', rowCount: 0, ddl: '' })), indexes: [], triggers: [], pragmas: {} });
   }
@@ -28,7 +28,7 @@ const connection = { id: 'pg', label: 'Test PostgreSQL', url: 'postgres://localh
     if (init?.method === 'POST') { state.set(key, body.value); return Response.json({ ok: true }); }
     return Response.json(state.get(key) ?? (key.startsWith('sql:') ? { tabs: [{ id: 'c', name: 'Console', sql: 'SELECT * FROM items' }], activeId: 'c', history: [] } : null));
   }
-  if (url.pathname === '/api/query') { queries.push(body); return Response.json({ columns: ['schema'], rows: [{ schema: body.schema }], ms: 1, hasMore: false, offset: 0 }); }
+  if (url.pathname === '/api/datasource/query') { queries.push(body); return Response.json({ columns: ['schema'], rows: [{ schema: body.schema }], ms: 1, hasMore: false, offset: 0 }); }
   if (url.pathname === '/api/access') return Response.json({ writable: false });
   throw new Error(`Unexpected request: ${url}`);
 };

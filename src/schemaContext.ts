@@ -1,4 +1,4 @@
-import type { DbSchema } from '../shared.ts';
+import type { DbSchema } from '../shared/types.ts';
 import type { DbSource } from './dbApi.ts';
 
 export interface SchemaPreference { schema?: string; showSystem: boolean }

@@ -12,7 +12,14 @@ const server = Bun.serve({
   maxRequestBodySize: 4 * 1024 * 1024,
   async fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname.startsWith("/api/")) return app(req);
+    if (url.pathname.startsWith("/api/")) {
+      // API work can legitimately run for minutes (blocking console commands,
+      // 300s statement/mutation timeouts) — the socket idle timeout would
+      // reset those mid-flight. Bounds live in the per-request timeouts;
+      // disable the socket-level one here instead.
+      server.timeout(req, 0);
+      return app(req);
+    }
     const asset = assets.get(url.pathname);
     if (!asset || req.method !== "GET") return new Response("Not found", { status: 404 });
     const file = Bun.file(new URL(`./dist/${asset}`, import.meta.url));
