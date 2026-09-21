@@ -6,7 +6,7 @@ for (const key of ['window','document','navigator','HTMLElement','HTMLInputEleme
 const requests: { url: string; body: any }[] = [];
 (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
   const body = JSON.parse(String(init?.body ?? '{}')); requests.push({ url, body });
-  if (url.endsWith('/connections/test')) return Response.json({ database: 'postgres', user: 'postgres', serverVersion: '17', ms: 2 });
+  if (url.endsWith('/datasource/test')) return Response.json({ version: '17', summary: { database: 'postgres', user: 'postgres', 'ping ms': 2 } });
   if (url.endsWith('/connections')) return Response.json({ id: 'local', label: body.label, url: 'postgres://localhost/postgres', environment: body.environment, readOnly: body.readOnly });
   if (url.endsWith('/open')) return Response.json({ path: body.path });
   return Response.json({ error: 'unexpected request' }, { status: 500 });

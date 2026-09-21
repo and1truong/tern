@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
-import type { DbSchema, ExecResult, QueryResult } from "../shared.ts";
+import type { DbSchema, ExecResult, QueryResult } from "../shared/types.ts";
 import { dbApi } from "./dbApi.ts";
 import type { DbSource } from "./dbApi.ts";
-import { isWriteSql, sqlToRun, executionUnits } from "./sqlConsole.ts";
+import { isWriteSql, sqlToRun, executionUnits } from "../shared/sqlConsole.ts";
 import Notice from "./Notice.tsx";
-import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../binaryValues.ts";
-import { boundConsoleHistory } from "./consoleHistory.ts";
+import { binaryByteLength, isDbBinaryValue, unwrapDbValueForDisplay } from "../shared/binaryValues.ts";
+import { boundConsoleHistory, redactSqlSecrets } from "./consoleHistory.ts";
 
 interface ConsoleTab { id: string; name: string; sql: string }
 interface HistoryEntry { id: string; sql: string; ranAt: number; ms: number; ok: boolean }
@@ -20,11 +20,24 @@ function freshConsole(): SavedConsole {
   return { tabs: [{ id, name: "Console 1", sql: "" }], activeId: id, history: [] };
 }
 
-function isSavedConsole(value: unknown): value is SavedConsole {
+export function isSavedConsole(value: unknown): value is SavedConsole {
   if (!value || typeof value !== "object") return false;
   const saved = value as Partial<SavedConsole>;
-  return Array.isArray(saved.tabs) && saved.tabs.length > 0 && typeof saved.activeId === "string" && Array.isArray(saved.history);
+  return Array.isArray(saved.tabs) && saved.tabs.length > 0 && typeof saved.activeId === "string" && Array.isArray(saved.history)
+    // A corrupt tab or history entry must not reach render — `active.sql`
+    // would be undefined and crash `active.sql.trim()` with no boundary.
+    && saved.tabs.every(t => t && typeof t.id === "string" && typeof t.name === "string" && typeof t.sql === "string")
+    && saved.history.every(h => h && typeof h.id === "string" && typeof h.sql === "string"
+      && typeof h.ranAt === "number" && typeof h.ms === "number" && typeof h.ok === "boolean");
 }
+
+// Persisted copies scrub credential literals — the in-memory buffer keeps the
+// user's text, but app_state is plaintext.
+const stash = (state: SavedConsole): SavedConsole => ({
+  ...state,
+  tabs: state.tabs.map(t => ({ ...t, sql: redactSqlSecrets(t.sql) })),
+  history: state.history.map(h => ({ ...h, sql: redactSqlSecrets(h.sql) })),
+});
 
 export function SqlEditor({ documentId, source, schema, writable, onExeced, onDirty, onLatency }: {
   documentId: string;
@@ -51,13 +64,15 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
   useEffect(() => {
     dbApi.state.get<SavedConsole>(storageKey).then((value) => {
       if (isSavedConsole(value)) setConsole(boundConsoleHistory(value));
-      setReady(true);
-    }).catch((e) => setError(String(e)));
+    }).catch((e) => setError(String(e)))
+      // A failed restore must still unlock the editor — ready gates
+      // editable/run, not just the loaded state.
+      .finally(() => setReady(true));
   }, [storageKey]);
   const latest = useRef(consoleState);
   latest.current = consoleState;
   useEffect(() => () => {
-    if (saveTimer.current) { clearTimeout(saveTimer.current); void dbApi.state.set(storageKey, latest.current); }
+    if (saveTimer.current) { clearTimeout(saveTimer.current); void dbApi.state.set(storageKey, stash(latest.current)).catch(() => {}); }
     controller.current?.abort();
   }, [storageKey]);
   const persist = (next: SavedConsole) => {
@@ -66,20 +81,25 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     setConsole(next);
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     onDirty(true);
-    void dbApi.state.set(storageKey, next).then(() => { if (version === saveVersion.current) onDirty(false); }).catch((e) => setError(String(e)));
+    // A failed save must not wedge the doc dirty forever.
+    void dbApi.state.set(storageKey, stash(next)).catch((e) => setError(String(e))).finally(() => { if (version === saveVersion.current) onDirty(false); });
   };
   const active = consoleState.tabs.find((tab) => tab.id === consoleState.activeId) ?? consoleState.tabs[0];
   const updateSql = (value: string) => {
     const version = ++saveVersion.current;
     const next = boundConsoleHistory({
-      ...consoleState,
-      tabs: consoleState.tabs.map((tab) => tab.id === active.id ? { ...tab, sql: value } : tab),
+      ...latest.current,
+      tabs: latest.current.tabs.map((tab) => tab.id === active.id ? { ...tab, sql: value } : tab),
     });
     setConsole(next);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     onDirty(true);
-    saveTimer.current = setTimeout(() => { saveTimer.current = null; void dbApi.state.set(storageKey, next).then(() => { if (version === saveVersion.current) onDirty(false); }).catch((e) => setError(String(e))); }, 250);
+    // Flush latest.current, not the keystroke-time snapshot — a persist()
+    // between now and then must not be overwritten with an older object.
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; void dbApi.state.set(storageKey, stash(latest.current)).catch((e) => setError(String(e))).finally(() => { if (version === saveVersion.current) onDirty(false); }); }, 250);
   };
+  // SQL documents only exist for relational sources; redis uses the console.
+  const dialect = source.kind === "postgres" ? "postgres" as const : "sqlite" as const;
   const completionSchema = useMemo(() => Object.fromEntries(schema.tables.map((table) => [
     table.schema ? `${table.schema}.${table.name}` : table.name,
     table.columns.map((column) => column.name),
@@ -94,7 +114,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     const view = editor.current;
     const selection = view?.state.selection.main ?? { from: 0, to: 0 };
     let units: ReturnType<typeof executionUnits>;
-    try { units = executionUnits(sqlToRun(active.sql, selection, all, source.kind), source.kind); }
+    try { units = executionUnits(sqlToRun(active.sql, selection, all, dialect), dialect); }
     catch (e) { setError(String(e)); return; }
     const { statements, transaction, readOnly } = units;
     if (!statements.length) return;
@@ -109,7 +129,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
     for (const statement of statements) {
       if (abort.signal.aborted) break;
       const started = performance.now();
-      const isWrite = forceWrite || transaction || isWriteSql(statement, source.kind);
+      const isWrite = forceWrite || transaction || isWriteSql(statement, dialect);
       if (isWrite && !readOnlyBatch && !writable) {
         nextOutputs.push({ sql: statement, error: "Read-only mode: enable Writable before running this statement." });
         break;
@@ -129,13 +149,15 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
           id: crypto.randomUUID(), sql: statement, ranAt: Date.now(),
           ms: output.result?.ms ?? output.exec?.ms ?? performance.now() - started, ok: true,
         };
-        nextConsole = { ...nextConsole, history: [entry, ...nextConsole.history].slice(0, 100) };
+        // Merge into latest.current — the history sidebar stays usable mid-run
+        // and a Clear/click must not be reverted by the run-start snapshot.
+        nextConsole = { ...latest.current, history: [entry, ...latest.current.history].slice(0, 100) };
         persist(nextConsole);
       } catch (runError) {
         const message = controller.current?.signal.aborted ? "Query cancelled." : String(runError);
         nextOutputs.push({ sql: statement, error: message });
         const entry: HistoryEntry = { id: crypto.randomUUID(), sql: statement, ranAt: Date.now(), ms: performance.now() - started, ok: false };
-        nextConsole = { ...nextConsole, history: [entry, ...nextConsole.history].slice(0, 100) };
+        nextConsole = { ...latest.current, history: [entry, ...latest.current.history].slice(0, 100) };
         persist(nextConsole);
         break;
       }
@@ -149,9 +171,12 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
 
   const explain = async () => {
     const selection = editor.current?.state.selection.main ?? { from: 0, to: 0 };
-    const statement = sqlToRun(active.sql, selection, false, source.kind)[0];
+    let statement: string | undefined;
+    // sqlToRun can throw on ambiguous scripts (run() guards the same call).
+    try { statement = sqlToRun(active.sql, selection, false, dialect)[0]; }
+    catch (e) { setError(String(e)); return; }
     if (!statement) return;
-    if (isWriteSql(statement, source.kind)) {
+    if (isWriteSql(statement, dialect)) {
       setOutputs([{ sql: statement, kind: "explain", error: "EXPLAIN is available only for read queries." }]);
       return;
     }
@@ -205,7 +230,7 @@ export function SqlEditor({ documentId, source, schema, writable, onExeced, onDi
           <aside className="w-64 max-w-[40%] border-l border-[var(--border)] flex flex-col bg-[var(--bg)]">
             <div className="flex items-center px-3 py-2 border-b border-[var(--border)] text-xs font-bold text-[var(--text)]">
               Query history
-              <button onClick={() => persist({ ...consoleState, history: [] })} className="ml-auto text-[10px] text-[var(--muted)]">Clear</button>
+              <button onClick={() => persist({ ...latest.current, history: [] })} className="ml-auto text-[10px] text-[var(--muted)]">Clear</button>
             </div>
             <div className="overflow-auto">
               {consoleState.history.map((entry) => (

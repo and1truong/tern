@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openAppDatabase } from "./appDatabase.ts";
@@ -17,7 +17,7 @@ test("legacy migration preserves committed WAL connections, credentials and app 
   const old = openAppDatabase(source);
   const oldSecrets = new Map<string, string>();
   const currentSecrets = new Map<string, string>();
-  const saved = await makeConnections(old, secrets(oldSecrets)).save("saved", "postgres://user:fixture@localhost/test");
+  const saved = await makeConnections(old, secrets(oldSecrets)).save("postgres", "saved", "postgres://user:fixture@localhost/test");
   old.query("INSERT INTO app_state VALUES (?, ?)").run("workspace", JSON.stringify({ sql: "SELECT 42", activeId: saved.id }));
   old.query("INSERT INTO recent_files VALUES (?, ?)").run("/tmp/example.sqlite", 1);
   migrateAppDatabase(source, target); // source remains open with WAL writes
@@ -40,14 +40,36 @@ test("Tern credentials win and failed migration leaves legacy credentials intact
   const old = new Map([['connection:x', 'legacy-fixture']]);
   const current = new Map([['connection:x', 'tern-fixture']]);
   expect(await withLegacyCredentials(secrets(current), secrets(old)).get('connection:x') === current.get('connection:x')).toBe(true);
+  // Copy-back failure is tolerated — the legacy credential still resolves.
   const failing = { ...secrets(), set: async () => { throw new Error('locked'); } };
-  await expect(withLegacyCredentials(failing, secrets(old)).get('connection:x')).rejects.toThrow('locked');
+  expect(await withLegacyCredentials(failing, secrets(old)).get('connection:x')).toBe('legacy-fixture');
   expect(old.has('connection:x')).toBe(true);
+});
+
+test("the legacy copy-back cannot clobber a concurrent credential write", async () => {
+  const current = new Map<string, string>();
+  const old = new Map([['connection:c', 'legacy-fixture']]);
+  const wrapped = withLegacyCredentials(secrets(current), secrets(old));
+  // get() copies the legacy value back — a save issued in the same tick is
+  // serialized behind it, so the newer credential wins instead of being
+  // overwritten by the stale copy-back.
+  const [got] = await Promise.all([wrapped.get('connection:c'), wrapped.set('connection:c', 'new-fixture')]);
+  expect(got).toBe('legacy-fixture');
+  expect(current.get('connection:c')).toBe('new-fixture');
+});
+
+test("a corrupt legacy file is skipped, never a startup failure", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tern-migration-"));
+  const source = join(dir, "legacy.sqlite");
+  const target = join(dir, "tern", "app.sqlite");
+  writeFileSync(source, "not a sqlite file at all");
+  expect(() => migrateAppDatabase(source, target)).not.toThrow();
+  expect(existsSync(target)).toBe(false);
 });
 
 test("plaintext legacy rows never replace an existing Tern credential", async () => {
   const db = openAppDatabase(':memory:');
-  db.query('INSERT INTO pg_connections(id,label,url) VALUES(?,?,?)').run('same', 'legacy', 'postgres://old:fixture@localhost/old');
+  db.query('INSERT INTO datasource_connections(id,label,driver,url) VALUES(?,?,?,?)').run('same', 'legacy', 'postgres', 'postgres://old:fixture@localhost/old');
   const current = new Map([['connection:same', 'postgres://new:fixture@localhost/new']]);
   const connections = makeConnections(db, withLegacyCredentials(secrets(current), secrets()));
   expect(await connections.resolveUrl('same') === current.get('connection:same')).toBe(true);

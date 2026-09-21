@@ -1,9 +1,9 @@
 import { Plus, X } from "lucide-react";
-import type { DbColumn } from "../shared.ts";
+import type { DbColumn } from "../shared/types.ts";
 import {
   type FilterModel, type FilterGroup, type FilterRule, type FilterOp,
   type DbDialect, opsFor, defaultOp, opNeedsValue, newRule, newGroup, MAX_DEPTH,
-} from "./dbFilter.ts";
+} from "../shared/dbFilter.ts";
 
 export function DatabaseFilterBuilder({ model, cols, dialect, onChange }: {
   model: FilterModel; cols: DbColumn[]; dialect: DbDialect; onChange: (m: FilterModel) => void;

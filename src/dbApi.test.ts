@@ -1,6 +1,33 @@
 import { test, expect } from "bun:test";
 import { dbApi } from "./dbApi.ts";
 
+test('a queued access re-assert reads intent at dispatch time', async () => {
+  const original = globalThis.fetch;
+  const sent: unknown[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  globalThis.fetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    sent.push(body.writable);
+    await gate;
+    return Response.json({ writable: body.writable });
+  }) as typeof fetch;
+  try {
+    const src = { kind: 'sqlite', path: '/tmp/access-intent.db' } as Parameters<typeof dbApi.access>[0];
+    let intent = true;
+    const first = dbApi.access(src, true);
+    // The toggle this re-assert raced fails and rolls back while the request
+    // sits queued — dispatching the stale `true` would leave the server
+    // writable under a read-only UI.
+    const second = dbApi.access(src, () => intent);
+    intent = false;
+    release();
+    await Promise.all([first, second]);
+    expect(sent).toEqual([true, false]);
+  } finally { release(); globalThis.fetch = original; }
+});
+
+
 test('persistent state writes cannot overtake one another', async () => {
   const original = globalThis.fetch;
   const sent: number[] = [];

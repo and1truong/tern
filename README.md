@@ -2,7 +2,7 @@
 
 ![](assets/hero.png)
 
-**A fast, lightweight, standalone database workbench for SQLite and PostgreSQL, built with Bun and React.**
+**A fast, lightweight, standalone database workbench for SQLite, PostgreSQL, Redis and Valkey, built with Bun and React.**
 
 Tern is a compact, developer-focused database manager inspired by desktop IDEs and workbench-style tools such as Dockyard and DataGrip. It is designed for high information density, fast keyboard-driven workflows, and minimal runtime dependencies.
 
@@ -13,7 +13,7 @@ Tern aims to sit between heavyweight database IDEs and overly simple database br
 - standalone — no TabTerm runtime or workspace model
 - fast startup and low overhead
 - native Bun runtime
-- direct SQLite and PostgreSQL support
+- direct SQLite, PostgreSQL, Redis and Valkey support
 - dense desktop-style UI instead of a SaaS dashboard
 - minimal dependencies and simple architecture
 
@@ -43,6 +43,19 @@ Browse:
 - routines
 - extensions
 - DDL
+
+### Redis and Valkey
+
+One Redis-compatible driver family — flavor, version and capabilities are detected from the server after connecting.
+
+- connection profiles with URL or host/port, username/password, TLS (`rediss://`), and logical database selection
+- key explorer with incremental `SCAN` (never `KEYS`), pattern and type filters, rename, delete, expire, persist
+- type-aware viewer and editor for strings, hashes, lists, sets, sorted sets, and streams
+- command console with multi-line editing, history, favorites, and readable nested RESP output
+- deterministic, offline autocomplete (command names, syntax positions, key names)
+- command explain: semantics, access classification, complexity, blocking behavior, TTL side effects, cluster and large-key risks
+- safety linting that warns on risky patterns (`KEYS`, `FLUSHALL`, unbounded reads, indefinite blocking) and never rewrites commands
+- runs on Bun's built-in Redis client — no external Redis dependency
 
 ### Table browser and editor
 

@@ -27,7 +27,9 @@ async function exercise(width: number) {
   const React = (await import("react")).default;
   const { createRoot } = await import("react-dom/client");
   const { flushSync } = await import("react-dom");
-  const { InsightsPane, ObjectTree, SchemaDiagramPane } = await import("../src/DatabaseViews.tsx");
+  const { InsightsPane } = await import("../src/InsightsPane.tsx");
+  const { ObjectTree } = await import("../src/ObjectTree.tsx");
+  const { SchemaDiagramPane } = await import("../src/SchemaDiagramPane.tsx");
   const schema = {
     schemas: ["audit", "public", "main"],
     tables: [
