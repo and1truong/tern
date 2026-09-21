@@ -497,7 +497,7 @@ describe("relational routes", () => {
             seen = includeSystem;
             return { schemas: [], tables: [], indexes: [], triggers: [], pragmas: {} };
           },
-        },
+        } as never,
       },
     });
     const relRegistry = createDriverRegistry();
